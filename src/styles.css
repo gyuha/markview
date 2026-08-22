@@ -1,0 +1,351 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1f2328;
+  --fg-muted: #59636e;
+  --border: #d1d9e0;
+  --code-bg: #f6f8fa;
+  --quote-border: #d1d9e0;
+  --link: #0969da;
+  --error-bg: #fff1f0;
+  --error-fg: #b3261e;
+  --scrollbar-size: 4px;
+  --scrollbar-thumb: rgb(0 0 0 / 22%);
+  --scrollbar-thumb-hover: rgb(0 0 0 / 38%);
+}
+
+[data-theme="dark"] {
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --fg-muted: #9198a1;
+  --border: #3d444d;
+  --code-bg: #151b23;
+  --quote-border: #3d444d;
+  --link: #4493f8;
+  --error-bg: #2d1214;
+  --error-fg: #ff7b72;
+  --scrollbar-thumb: rgb(255 255 255 / 22%);
+  --scrollbar-thumb-hover: rgb(255 255 255 / 38%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+#chrome {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  background: var(--code-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+#tabbar {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 1px;
+  overflow-x: auto;
+}
+
+#theme {
+  display: flex;
+  flex: 0 0 auto;
+  align-self: center;
+  gap: 2px;
+  margin: 0 0.5rem;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.theme-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  color: var(--fg-muted);
+  cursor: default;
+  background: none;
+  border: none;
+  border-radius: 5px;
+}
+
+.theme-option:hover {
+  color: var(--fg);
+}
+
+.theme-option.active {
+  color: var(--fg);
+  background: var(--code-bg);
+}
+
+.theme-option svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.6rem 0.45rem 0.9rem;
+  font-size: 0.82rem;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  cursor: default;
+  background: var(--code-bg);
+  border-right: 1px solid var(--border);
+}
+
+.tab.active {
+  color: var(--fg);
+  background: var(--bg);
+}
+
+.tab-close {
+  padding: 0 0.2rem;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--fg-muted);
+  cursor: default;
+  background: none;
+  border: none;
+  border-radius: 4px;
+}
+
+.tab-close:hover {
+  color: var(--fg);
+  background: var(--border);
+}
+
+#panes {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 탭마다 자기 스크롤 컨테이너를 갖는다. 감춰도 scrollTop과 렌더 결과가 남는다. */
+.pane {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+}
+
+#empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+/* id 선택자가 UA의 [hidden]{display:none}을 덮으므로 명시적으로 되돌린다. */
+#empty[hidden] {
+  display: none;
+}
+
+#notice {
+  flex: 0 0 auto;
+  padding: 0.6rem 1rem;
+  font-size: 0.85rem;
+  color: var(--error-fg);
+  background: var(--error-bg);
+  border-top: 1px solid var(--error-fg);
+}
+
+.markdown-body {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 6rem;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  line-height: 1.3;
+  margin: 2rem 0 1rem;
+}
+
+.markdown-body h1 {
+  font-size: 1.9rem;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown-body h2 {
+  font-size: 1.45rem;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body table {
+  margin: 0 0 1rem;
+}
+
+.markdown-body a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+
+.markdown-body img {
+  max-width: 100%;
+}
+
+.markdown-body blockquote {
+  padding: 0 1em;
+  color: var(--fg-muted);
+  border-left: 0.25em solid var(--quote-border);
+}
+
+.markdown-body table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--border);
+}
+
+.markdown-body th {
+  background: var(--code-bg);
+}
+
+.markdown-body code {
+  padding: 0.2em 0.4em;
+  font-size: 0.875em;
+  background: var(--code-bg);
+  border-radius: 6px;
+}
+
+.markdown-body pre {
+  padding: 1rem;
+  overflow-x: auto;
+  background: var(--code-bg);
+  border-radius: 6px;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  background: none;
+}
+
+.markdown-body .task-list-item {
+  list-style: none;
+}
+
+.markdown-body .task-list-item input {
+  margin-right: 0.4em;
+}
+
+.markdown-body ul.contains-task-list {
+  padding-left: 0.4rem;
+}
+
+/* 스크롤바 — macOS 기본은 15px 남짓으로 두껍다. WKWebView 전용 의사요소로 얇게 만든다. */
+.pane::-webkit-scrollbar,
+#tabbar::-webkit-scrollbar,
+.markdown-body pre::-webkit-scrollbar,
+.markdown-body table::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+.pane::-webkit-scrollbar-track,
+#tabbar::-webkit-scrollbar-track,
+.markdown-body pre::-webkit-scrollbar-track,
+.markdown-body table::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pane::-webkit-scrollbar-thumb,
+#tabbar::-webkit-scrollbar-thumb,
+.markdown-body pre::-webkit-scrollbar-thumb,
+.markdown-body table::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: calc(var(--scrollbar-size) / 2);
+}
+
+.pane::-webkit-scrollbar-thumb:hover,
+#tabbar::-webkit-scrollbar-thumb:hover,
+.markdown-body pre::-webkit-scrollbar-thumb:hover,
+.markdown-body table::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.pane::-webkit-scrollbar-corner,
+#tabbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.mermaid-block {
+  margin: 0 0 1rem;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.mermaid-block svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-block.mermaid-failed {
+  text-align: left;
+}
+
+.mermaid-error {
+  margin: 0 0 0.4rem;
+  font-size: 0.82rem;
+  color: var(--error-fg);
+}
+
+.mermaid-block::-webkit-scrollbar {
+  height: var(--scrollbar-size);
+}
+
+.mermaid-block::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.mermaid-block::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: calc(var(--scrollbar-size) / 2);
+}
