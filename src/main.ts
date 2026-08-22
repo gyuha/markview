@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { renderMermaid } from "./mermaid";
@@ -293,4 +294,16 @@ window.addEventListener("DOMContentLoaded", async () => {
       await openPath(path);
     }
   });
+
+  // OS 파일 연결로 넘어온 경로. Rust 버퍼가 단일 출처이므로 시작 시 한 번 비우고,
+  // 실행 중에 새로 열리면 알림을 받아 다시 비운다 — 비우는 방식이라 중복 열기가 없다.
+  await listen("files-opened", () => void drainPendingFiles());
+  await drainPendingFiles();
 });
+
+async function drainPendingFiles(): Promise<void> {
+  const paths = await invoke<string[]>("take_pending_files");
+  for (const path of paths) {
+    await openPath(path);
+  }
+}
