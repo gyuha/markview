@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { renderMermaid } from "./mermaid";
 import { dirname, isExternalHref, renderInto, resolvePath } from "./render";
@@ -128,6 +129,12 @@ function createTabButton(path: string): HTMLElement {
   button.appendChild(close);
 
   button.addEventListener("click", () => activate(path));
+  // 가운데 버튼. × 버튼의 click 핸들러는 button 0만 받으므로 충돌하지 않는다.
+  button.addEventListener("auxclick", (event) => {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    closeTab(path);
+  });
   return button;
 }
 
@@ -299,6 +306,17 @@ window.addEventListener("DOMContentLoaded", async () => {
   // 실행 중에 새로 열리면 알림을 받아 다시 비운다 — 비우는 방식이라 중복 열기가 없다.
   await listen("files-opened", () => void drainPendingFiles());
   await drainPendingFiles();
+
+  // ⌘W는 메뉴를 거쳐 온다(가속기가 메뉴에 묶여 있어 keydown으로는 오지 않는다).
+  await listen("close-tab", () => {
+    if (activePath) {
+      closeTab(activePath);
+      return;
+    }
+    // 닫을 탭이 없으면 창을 닫는다 — 메뉴는 탭 개수를 모르므로 판단이 여기 있다.
+    void getCurrentWindow().close();
+  });
+  await listen("close-window", () => void getCurrentWindow().close());
 });
 
 async function drainPendingFiles(): Promise<void> {

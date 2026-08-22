@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager, RunEvent};
 
 /// 드롭·열기로 받아들일 최대 파일 크기. 프론트엔드 파싱이라 이보다 크면 메인 스레드가 막힌다.
@@ -72,6 +73,81 @@ fn read_markdown(app: AppHandle, path: String) -> Result<Document, String> {
     })
 }
 
+/// 메뉴를 직접 조립한다.
+/// predefined `close_window`의 가속기는 ⌘W로 고정이고 macOS는 메뉴 키 등가물을
+/// responder chain보다 먼저 처리하므로, 그 항목을 두는 한 webview는 ⌘W를 볼 수 없다.
+/// 그래서 predefined close_window를 어느 메뉴에도 넣지 않고 커스텀 항목 두 개로 대체한다.
+fn build_menu(handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let app_menu = Submenu::with_items(
+        handle,
+        "markview",
+        true,
+        &[
+            &PredefinedMenuItem::about(handle, None, Some(AboutMetadata::default()))?,
+            &PredefinedMenuItem::separator(handle)?,
+            &PredefinedMenuItem::hide(handle, None)?,
+            &PredefinedMenuItem::hide_others(handle, None)?,
+            &PredefinedMenuItem::show_all(handle, None)?,
+            &PredefinedMenuItem::separator(handle)?,
+            &PredefinedMenuItem::quit(handle, None)?,
+        ],
+    )?;
+
+    let file_menu = Submenu::with_items(
+        handle,
+        "File",
+        true,
+        &[
+            &MenuItem::with_id(handle, "close-tab", "Close Tab", true, Some("CmdOrCtrl+W"))?,
+            &MenuItem::with_id(
+                handle,
+                "close-window",
+                "Close Window",
+                true,
+                Some("Shift+CmdOrCtrl+W"),
+            )?,
+        ],
+    )?;
+
+    // 복사·전체선택이 빠지면 문서 텍스트를 복사할 수 없게 되므로 반드시 유지한다.
+    let edit_menu = Submenu::with_items(
+        handle,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(handle, None)?,
+            &PredefinedMenuItem::redo(handle, None)?,
+            &PredefinedMenuItem::separator(handle)?,
+            &PredefinedMenuItem::cut(handle, None)?,
+            &PredefinedMenuItem::copy(handle, None)?,
+            &PredefinedMenuItem::paste(handle, None)?,
+            &PredefinedMenuItem::select_all(handle, None)?,
+        ],
+    )?;
+
+    let view_menu = Submenu::with_items(
+        handle,
+        "View",
+        true,
+        &[&PredefinedMenuItem::fullscreen(handle, None)?],
+    )?;
+
+    let window_menu = Submenu::with_items(
+        handle,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(handle, None)?,
+            &PredefinedMenuItem::maximize(handle, None)?,
+        ],
+    )?;
+
+    Menu::with_items(
+        handle,
+        &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu],
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -86,6 +162,19 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        .menu(|handle| build_menu(handle))
+        .on_menu_event(|handle, event| {
+            // 메뉴는 창 개수를 알지만 탭 개수는 모른다 — 탭 판단은 프론트엔드에 맡긴다.
+            match event.id().as_ref() {
+                "close-tab" => {
+                    let _ = handle.emit("close-tab", ());
+                }
+                "close-window" => {
+                    let _ = handle.emit("close-window", ());
+                }
+                _ => {}
+            }
+        })
         .manage(PendingFiles::default())
         .invoke_handler(tauri::generate_handler![read_markdown, take_pending_files])
         .build(tauri::generate_context!())
