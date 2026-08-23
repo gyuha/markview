@@ -93,6 +93,11 @@ function applyTheme(): void {
 function closeTab(path: string): void {
   const index = tabs.findIndex((t) => t.path === path);
   if (index < 0) return;
+  // 마지막 문서를 닫으면 빈 화면을 남기지 않고 창을 닫는다 (Safari·Chrome과 같은 동작).
+  if (tabs.length === 1) {
+    void getCurrentWindow().close();
+    return;
+  }
   const [tab] = tabs.splice(index, 1);
   tab.pane.remove();
   tab.button.remove();
@@ -309,11 +314,11 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   // ⌘W는 메뉴를 거쳐 온다(가속기가 메뉴에 묶여 있어 keydown으로는 오지 않는다).
   await listen("close-tab", () => {
+    // 탭이 하나 남았을 때 창을 닫는 판단은 closeTab 안에 있다 — 가운데 클릭도 같은 경로를 탄다.
     if (activePath) {
       closeTab(activePath);
       return;
     }
-    // 닫을 탭이 없으면 창을 닫는다 — 메뉴는 탭 개수를 모르므로 판단이 여기 있다.
     void getCurrentWindow().close();
   });
   await listen("close-window", () => void getCurrentWindow().close());
