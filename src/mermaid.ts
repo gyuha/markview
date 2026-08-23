@@ -6,6 +6,13 @@ let mermaidApi: MermaidApi | null = null;
 let initializedFor: Effective | null = null;
 let idSeq = 0;
 
+/**
+ * `테마\n원문` → 렌더된 SVG.
+ * 편집 중에는 문서가 통째로 다시 렌더되므로 자리표시자가 매번 새로 생기는데,
+ * 원문이 그대로인 다이어그램을 다시 그리면 타이핑이 즉시 막힌다. 캐시가 그것을 막는다.
+ */
+const svgCache = new Map<string, string>();
+
 /** 번들을 실제로 mermaid가 필요한 순간까지 미룬다. */
 async function load(theme: Effective): Promise<MermaidApi> {
   if (!mermaidApi) {
@@ -37,11 +44,19 @@ export async function renderMermaid(scope: HTMLElement, theme: Effective): Promi
 
   for (const block of blocks) {
     const source = block.dataset.mermaid ?? "";
+    const cacheKey = `${theme}\n${source}`;
+    const cached = svgCache.get(cacheKey);
+    if (cached !== undefined) {
+      block.classList.remove("mermaid-failed");
+      block.innerHTML = cached;
+      continue;
+    }
     const id = `mermaid-${idSeq++}`;
     try {
       const { svg } = await mermaid.render(id, source);
       block.classList.remove("mermaid-failed");
       block.innerHTML = svg;
+      svgCache.set(cacheKey, svg);
     } catch (e) {
       // 성공 경로에서는 부르지 않는다 — 성공한 SVG의 id가 이 id와 같아서 방금 넣은 것을 지운다.
       discardStrayNodes(id);

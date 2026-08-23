@@ -149,11 +149,78 @@ body {
   min-height: 0;
 }
 
-/* 탭마다 자기 스크롤 컨테이너를 갖는다. 감춰도 scrollTop과 렌더 결과가 남는다. */
+/* 탭마다 페인을 갖고, 그 안에서 좌우로 갈린다. 감춰도 스크롤과 렌더 결과가 남는다. */
 .pane {
   position: absolute;
   inset: 0;
+  display: flex;
+  min-height: 0;
+}
+
+/* 스크롤 컨테이너는 프리뷰 쪽이다 (분할 전에는 페인 전폭을 쓴다). */
+.preview {
+  flex: 1 1 50%;
+  min-width: 0;
   overflow-y: auto;
+}
+
+.editor-host {
+  flex: 1 1 50%;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+}
+
+.editor-host[hidden] {
+  display: none;
+}
+
+/* CodeMirror가 페인 높이를 채우게 한다. */
+.editor-host .cm-editor {
+  height: 100%;
+}
+
+.editor-host .cm-scroller {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+#edit-toggle {
+  display: flex;
+  flex: 0 0 auto;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  margin-left: 0.5rem;
+  padding: 0;
+  color: var(--fg-muted);
+  cursor: default;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+#edit-toggle:hover {
+  color: var(--fg);
+}
+
+#edit-toggle[aria-pressed="true"] {
+  color: var(--bg);
+  background: var(--link);
+  border-color: var(--link);
+}
+
+#edit-toggle svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 #empty {
@@ -281,7 +348,8 @@ body {
 }
 
 /* 스크롤바 — macOS 기본은 15px 남짓으로 두껍다. WKWebView 전용 의사요소로 얇게 만든다. */
-.pane::-webkit-scrollbar,
+.preview::-webkit-scrollbar,
+.editor-host .cm-scroller::-webkit-scrollbar,
 #tabbar::-webkit-scrollbar,
 .markdown-body pre::-webkit-scrollbar,
 .markdown-body table::-webkit-scrollbar {
@@ -289,14 +357,16 @@ body {
   height: var(--scrollbar-size);
 }
 
-.pane::-webkit-scrollbar-track,
+.preview::-webkit-scrollbar-track,
+.editor-host .cm-scroller::-webkit-scrollbar-track,
 #tabbar::-webkit-scrollbar-track,
 .markdown-body pre::-webkit-scrollbar-track,
 .markdown-body table::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.pane::-webkit-scrollbar-thumb,
+.preview::-webkit-scrollbar-thumb,
+.editor-host .cm-scroller::-webkit-scrollbar-thumb,
 #tabbar::-webkit-scrollbar-thumb,
 .markdown-body pre::-webkit-scrollbar-thumb,
 .markdown-body table::-webkit-scrollbar-thumb {
@@ -304,14 +374,14 @@ body {
   border-radius: calc(var(--scrollbar-size) / 2);
 }
 
-.pane::-webkit-scrollbar-thumb:hover,
+.preview::-webkit-scrollbar-thumb:hover,
 #tabbar::-webkit-scrollbar-thumb:hover,
 .markdown-body pre::-webkit-scrollbar-thumb:hover,
 .markdown-body table::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
 }
 
-.pane::-webkit-scrollbar-corner,
+.preview::-webkit-scrollbar-corner,
 #tabbar::-webkit-scrollbar-corner {
   background: transparent;
 }

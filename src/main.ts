@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { EditorView } from "@codemirror/view";
+import { applyEditorTheme, createEditor } from "./editor";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { renderMermaid } from "./mermaid";
 import { dirname, isExternalHref, renderInto, resolvePath } from "./render";
@@ -22,12 +24,22 @@ interface Doc {
 
 interface Tab {
   path: string;
-  /** 스크롤 컨테이너. 탭을 감출 때도 유지되므로 스크롤 위치와 렌더 결과가 보존된다. */
+  /** 좌우 분할 컨테이너. 탭을 감춰도 스크롤 위치와 렌더 결과가 보존된다. */
   pane: HTMLElement;
+  /** 스크롤 컨테이너 (프리뷰 쪽). */
+  preview: HTMLElement;
   body: HTMLElement;
   button: HTMLElement;
   /** 이 탭의 mermaid를 마지막으로 그린 실효 테마. 현재 테마와 다르면 활성화될 때 다시 그린다. */
   renderedTheme: Effective | null;
+  /** 편집 모드는 탭별 상태다. */
+  editing: boolean;
+  editorHost: HTMLElement;
+  /** 편집 모드에 처음 들어갈 때 만든다 — 뷰어로만 쓰는 탭은 CM6를 만들지 않는다. */
+  editor: EditorView | null;
+  /** 현재 원문. 편집하면 갱신된다. */
+  source: string;
+  previewTimer: number | undefined;
 }
 
 const tabs: Tab[] = [];
@@ -70,11 +82,48 @@ function activate(path: string): void {
   }
   emptyEl.hidden = tabs.length > 0;
 
+  syncEditToggle();
+
   // 감춰진 동안 테마가 바뀐 탭은 이 시점에 따라잡는다 (전체 탭을 즉시 재렌더하지 않는 이유).
   const tab = findTab(path);
   if (tab && tab.renderedTheme !== effective) {
     void paintMermaid(tab);
   }
+}
+
+let editToggleEl: HTMLElement | null = null;
+
+function syncEditToggle(): void {
+  const tab = activePath ? findTab(activePath) : undefined;
+  const on = tab?.editing ?? false;
+  editToggleEl?.setAttribute("aria-pressed", String(on));
+}
+
+/** 편집 모드를 켜고 끈다. CM6 인스턴스는 처음 켤 때 만든다. */
+function toggleEditing(tab: Tab): void {
+  tab.editing = !tab.editing;
+  tab.editorHost.hidden = !tab.editing;
+
+  if (tab.editing && !tab.editor) {
+    tab.editor = createEditor(tab.editorHost, tab.source, effective, (next) => {
+      tab.source = next;
+      schedulePreview(tab);
+    });
+  }
+  if (tab.editing) tab.editor?.focus();
+  syncEditToggle();
+}
+
+/**
+ * 프리뷰 갱신을 250ms 미룬다. 파싱이 프론트엔드에 있어(ADR 260822-220748)
+ * 키 입력마다 다시 그리면 메인 스레드가 막힌다.
+ */
+function schedulePreview(tab: Tab): void {
+  window.clearTimeout(tab.previewTimer);
+  tab.previewTimer = window.setTimeout(() => {
+    renderInto(tab.body, tab.source, tab.path);
+    void paintMermaid(tab);
+  }, 250);
 }
 
 async function paintMermaid(tab: Tab): Promise<void> {
@@ -86,6 +135,10 @@ async function paintMermaid(tab: Tab): Promise<void> {
 function applyTheme(): void {
   effective = effectiveOf(choice);
   applyChrome(effective);
+  // 다섯 번째 겹: 열려 있는 모든 에디터. CM6는 문서를 유지한 채 테마만 교체된다.
+  for (const tab of tabs) {
+    if (tab.editor) applyEditorTheme(tab.editor, effective);
+  }
   const active = activePath ? findTab(activePath) : undefined;
   if (active) void paintMermaid(active);
 }
@@ -99,6 +152,8 @@ function closeTab(path: string): void {
     return;
   }
   const [tab] = tabs.splice(index, 1);
+  window.clearTimeout(tab.previewTimer);
+  tab.editor?.destroy();
   tab.pane.remove();
   tab.button.remove();
   if (activePath !== path) return;
@@ -166,16 +221,38 @@ async function openPath(path: string): Promise<void> {
 
   const pane = document.createElement("div");
   pane.className = "pane";
+
+  const editorHost = document.createElement("div");
+  editorHost.className = "editor-host";
+  editorHost.hidden = true;
+  pane.appendChild(editorHost);
+
+  const preview = document.createElement("div");
+  preview.className = "preview";
   const body = document.createElement("article");
   body.className = "markdown-body";
-  pane.appendChild(body);
+  preview.appendChild(body);
+  pane.appendChild(preview);
+
   renderInto(body, doc.text, doc.path);
   panesEl.appendChild(pane);
 
   const button = createTabButton(doc.path);
   tabbarEl.appendChild(button);
 
-  const tab: Tab = { path: doc.path, pane, body, button, renderedTheme: null };
+  const tab: Tab = {
+    path: doc.path,
+    pane,
+    preview,
+    body,
+    button,
+    renderedTheme: null,
+    editing: false,
+    editorHost,
+    editor: null,
+    source: doc.text,
+    previewTimer: undefined,
+  };
   tabs.push(tab);
   activate(doc.path);
   await paintMermaid(tab);
@@ -187,12 +264,13 @@ async function reloadActive(): Promise<void> {
   const tab = findTab(activePath);
   if (!tab) return;
 
-  const scroll = tab.pane.scrollTop;
+  const scroll = tab.preview.scrollTop;
   try {
     const doc = await invoke<Doc>("read_markdown", { path: tab.path });
+    tab.source = doc.text;
     renderInto(tab.body, doc.text, doc.path);
     await paintMermaid(tab);
-    tab.pane.scrollTop = scroll;
+    tab.preview.scrollTop = scroll;
   } catch (e) {
     notify(String(e));
   }
@@ -284,6 +362,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   panesEl = document.querySelector<HTMLElement>("#panes")!;
   emptyEl = document.querySelector<HTMLElement>("#empty")!;
   noticeEl = document.querySelector<HTMLElement>("#notice")!;
+  editToggleEl = document.querySelector<HTMLElement>("#edit-toggle");
+  editToggleEl?.addEventListener("click", () => {
+    const tab = activePath ? findTab(activePath) : undefined;
+    if (tab) toggleEditing(tab);
+  });
+
   installThemeControl();
 
   // 사용자 토글과 OS 변경이 같은 진입점으로 들어온다 — 한쪽만 mermaid 재렌더를 잊는 일이 없도록.
@@ -294,9 +378,18 @@ window.addEventListener("DOMContentLoaded", async () => {
   installLinkHandler();
 
   window.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "r") {
+    if (!(event.metaKey || event.ctrlKey)) return;
+    const key = event.key.toLowerCase();
+    if (key === "r") {
       event.preventDefault();
       void reloadActive();
+      return;
+    }
+    // ⌘E는 기본 메뉴에 없으므로 여기서 잡힌다 (⌘W와 달리 메뉴 재조립이 불필요).
+    if (key === "e") {
+      event.preventDefault();
+      const tab = activePath ? findTab(activePath) : undefined;
+      if (tab) toggleEditing(tab);
     }
   });
 
