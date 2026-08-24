@@ -82,7 +82,11 @@ pnpm tauri build --debug --bundles app  # 빠른 .app 번들 (아이콘·파일 
 
 ## 구성
 
-- **Tauri v2** — Rust는 파일 경로·바이트와 창만 다룹니다. 노출된 커맨드는 `read_markdown` 하나이며 확장자·크기·타입을 검사합니다
+- **Tauri v2** — Rust는 파일 경로·바이트와 창만 다룹니다. 노출된 커맨드는 `read_markdown`(확장자·크기·타입 검사)과 `write_markdown`(이 세션에서 열어 본 경로만 허용, 수정 시각 충돌 감지) 둘뿐입니다
 - **프론트엔드** — 프레임워크 없이 TypeScript + Vite. markdown-it(파싱) · DOMPurify(sanitize) · highlight.js(코드) · mermaid(다이어그램) · CodeMirror 6(편집)
 
 주요 설계 결정은 [`.forge/adr/`](.forge/adr/)에 기록되어 있습니다 — 마크다운 파싱을 프론트엔드에 둔 이유, 프레임워크를 쓰지 않은 이유, raw HTML을 허용하고 sanitize하는 이유, asset protocol 권한을 실행 시점에 문서 단위로 좁히는 이유.
+
+## 라이선스
+
+MIT — [LICENSE](LICENSE) 참조.
