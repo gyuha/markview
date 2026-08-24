@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -20,16 +22,51 @@ fn take_pending_files(state: tauri::State<PendingFiles>) -> Vec<String> {
     std::mem::take(&mut *state.0.lock().unwrap())
 }
 
+/// 이 세션에서 실제로 읽은 문서 경로. 쓰기는 이 목록에 있는 경로만 허용한다.
+/// raw HTML을 허용했으므로(ADR 260822-222214) 임의 경로 쓰기를 IPC에 올리면
+/// 악성 문서의 XSS가 아무 파일이나 덮어쓸 수 있다.
+#[derive(Default)]
+struct OpenedPaths(Mutex<HashSet<PathBuf>>);
+
+/// 창 닫기를 한 번 통과시키는 플래그.
+/// 닫기 요청을 막고 프론트엔드에 확인을 넘기면, 확인을 마친 프론트엔드가 다시 close()를 부르는데
+/// 그것도 같은 이벤트를 일으켜 무한히 막히게 된다. 이 플래그가 두 번째 요청을 통과시킨다.
+/// (destroy()로 우회하면 더 짧지만 창 상태 저장을 건너뛸 수 있어 택하지 않았다.)
+#[derive(Default)]
+struct CloseGuard(AtomicBool);
+
+/// 프론트엔드가 "닫아도 된다"고 알리는 커맨드. 다음 닫기 요청 한 번을 통과시킨다.
+#[tauri::command]
+fn allow_close(guard: tauri::State<CloseGuard>) {
+    guard.0.store(true, Ordering::SeqCst);
+}
+
 #[derive(serde::Serialize)]
 struct Document {
     path: String,
     text: String,
+    /// 저장 직전에 외부 변경을 감지하기 위한 수정 시각(밀리초). 읽을 수 없으면 0.
+    mtime_ms: u64,
+}
+
+/// 파일의 수정 시각을 밀리초로. 비교용이므로 읽지 못하면 0을 준다(그 경우 비교를 건너뛴다).
+fn mtime_ms(path: &PathBuf) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// 마크다운 파일을 읽어 문자열로 돌려준다.
 /// plugin-fs의 넓은 scope를 여는 대신 이 커맨드 하나만 노출하고, 검증을 여기서 전부 한다.
 #[tauri::command]
-fn read_markdown(app: AppHandle, path: String) -> Result<Document, String> {
+fn read_markdown(
+    app: AppHandle,
+    opened: tauri::State<OpenedPaths>,
+    path: String,
+) -> Result<Document, String> {
     let p = PathBuf::from(&path);
 
     if p.is_dir() {
@@ -67,10 +104,76 @@ fn read_markdown(app: AppHandle, path: String) -> Result<Document, String> {
             .map_err(|e| format!("이미지 경로를 허용할 수 없습니다: {e}"))?;
     }
 
+    // 읽기에 성공한 경로만 쓰기 허용 목록에 들어간다.
+    opened.0.lock().unwrap().insert(p.clone());
+
     Ok(Document {
+        mtime_ms: mtime_ms(&p),
         path: p.to_string_lossy().to_string(),
         text,
     })
+}
+
+/// 저장 결과. 충돌이면 `conflict: true`로 돌려주고 프론트엔드가 확인을 받는다.
+#[derive(serde::Serialize, Debug)]
+struct SaveOutcome {
+    conflict: bool,
+    /// 저장에 성공했을 때의 새 수정 시각. 충돌이면 디스크의 현재 값.
+    mtime_ms: u64,
+}
+
+/// 편집 내용을 파일에 쓴다.
+///
+/// - 이 세션에서 읽은 경로만 허용한다 (임의 경로 쓰기를 노출하지 않는다).
+/// - `expected_mtime_ms`가 디스크와 다르면 쓰지 않고 충돌을 알린다. `force`면 무시하고 덮어쓴다.
+/// - 임시 파일에 쓴 뒤 rename 한다 — 중간에 끊겨도 원본이 반쯤 덮이지 않는다.
+/// 저장 정책과 실제 쓰기. Tauri 배관에서 분리해 두어 검증할 수 있게 한다.
+fn save_document(
+    opened: &HashSet<PathBuf>,
+    p: &PathBuf,
+    text: &str,
+    expected_mtime_ms: u64,
+    force: bool,
+) -> Result<SaveOutcome, String> {
+    if !opened.contains(p) {
+        return Err("이 세션에서 열지 않은 파일에는 저장할 수 없습니다.".into());
+    }
+
+    let current = mtime_ms(p);
+    if !force && expected_mtime_ms != 0 && current != 0 && current != expected_mtime_ms {
+        return Ok(SaveOutcome {
+            conflict: true,
+            mtime_ms: current,
+        });
+    }
+
+    let tmp = p.with_extension(format!(
+        "{}.markview-tmp",
+        p.extension().and_then(|e| e.to_str()).unwrap_or("md")
+    ));
+    std::fs::write(&tmp, text.as_bytes()).map_err(|e| format!("쓸 수 없습니다: {e}"))?;
+    std::fs::rename(&tmp, p).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("저장을 마칠 수 없습니다: {e}")
+    })?;
+
+    Ok(SaveOutcome {
+        conflict: false,
+        mtime_ms: mtime_ms(p),
+    })
+}
+
+#[tauri::command]
+fn write_markdown(
+    opened: tauri::State<OpenedPaths>,
+    path: String,
+    text: String,
+    expected_mtime_ms: u64,
+    force: bool,
+) -> Result<SaveOutcome, String> {
+    let p = PathBuf::from(&path);
+    let set = opened.0.lock().unwrap();
+    save_document(&set, &p, &text, expected_mtime_ms, force)
 }
 
 /// 메뉴를 직접 조립한다.
@@ -98,6 +201,8 @@ fn build_menu(handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         "File",
         true,
         &[
+            &MenuItem::with_id(handle, "save", "Save", true, Some("CmdOrCtrl+S"))?,
+            &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "close-tab", "Close Tab", true, Some("CmdOrCtrl+W"))?,
             &MenuItem::with_id(
                 handle,
@@ -166,6 +271,9 @@ pub fn run() {
         .on_menu_event(|handle, event| {
             // 메뉴는 창 개수를 알지만 탭 개수는 모른다 — 탭 판단은 프론트엔드에 맡긴다.
             match event.id().as_ref() {
+                "save" => {
+                    let _ = handle.emit("save", ());
+                }
                 "close-tab" => {
                     let _ = handle.emit("close-tab", ());
                 }
@@ -176,7 +284,25 @@ pub fn run() {
             }
         })
         .manage(PendingFiles::default())
-        .invoke_handler(tauri::generate_handler![read_markdown, take_pending_files])
+        .manage(OpenedPaths::default())
+        .manage(CloseGuard::default())
+        // 창 닫기 요청을 막고 프론트엔드에 넘긴다 — 미저장 문서 확인은 탭 상태를 아는 쪽이 해야 한다.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // 통과 플래그가 서 있으면 내리고 그대로 닫히게 둔다.
+                if window.state::<CloseGuard>().0.swap(false, Ordering::SeqCst) {
+                    return;
+                }
+                api.prevent_close();
+                let _ = window.emit("close-requested", ());
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            read_markdown,
+            write_markdown,
+            take_pending_files,
+            allow_close
+        ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
@@ -198,4 +324,63 @@ pub fn run() {
             let _ = handle.emit("files-opened", ());
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmpdir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("markview-test-{name}"));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn 열지_않은_파일에는_쓰지_못한다() {
+        let d = tmpdir("guard");
+        let f = d.join("a.md");
+        std::fs::write(&f, "원본").unwrap();
+
+        let err = save_document(&HashSet::new(), &f, "침입", 0, false).unwrap_err();
+        assert!(err.contains("열지 않은"), "{err}");
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "원본");
+    }
+
+    #[test]
+    fn 열린_파일은_저장되고_임시파일이_남지_않는다() {
+        let d = tmpdir("save");
+        let f = d.join("a.md");
+        std::fs::write(&f, "원본").unwrap();
+        let opened: HashSet<PathBuf> = [f.clone()].into();
+        let before = mtime_ms(&f);
+
+        let out = save_document(&opened, &f, "# 새 내용\n", before, false).unwrap();
+        assert!(!out.conflict);
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "# 새 내용\n");
+        assert_ne!(out.mtime_ms, 0);
+        let leftovers: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("markview-tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "임시파일 잔존: {leftovers:?}");
+    }
+
+    #[test]
+    fn 외부_변경은_덮어쓰지_않고_충돌로_알린다() {
+        let d = tmpdir("conflict");
+        let f = d.join("a.md");
+        std::fs::write(&f, "외부에서 바뀐 내용").unwrap();
+        let opened: HashSet<PathBuf> = [f.clone()].into();
+
+        let out = save_document(&opened, &f, "내 편집", 1, false).unwrap();
+        assert!(out.conflict, "충돌을 감지하지 못했다");
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "외부에서 바뀐 내용");
+
+        let forced = save_document(&opened, &f, "내 편집", 1, true).unwrap();
+        assert!(!forced.conflict);
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "내 편집");
+    }
 }
