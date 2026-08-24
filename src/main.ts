@@ -4,6 +4,8 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { EditorView } from "@codemirror/view";
 import { applyEditorTheme, createEditor } from "./editor";
+import { activeHeading, applyFormat, type FormatId } from "./format";
+import { confirmDialog } from "./modal";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { renderMermaid } from "./mermaid";
 import { dirname, isExternalHref, renderInto, resolvePath } from "./render";
@@ -20,7 +22,16 @@ import {
 interface Doc {
   path: string;
   text: string;
+  mtime_ms: number;
 }
+
+interface SaveOutcome {
+  conflict: boolean;
+  mtime_ms: number;
+}
+
+/** 보기 모드는 탭별 상태다. 편집 전용 · 좌우 분할 · 보기 전용. */
+type Mode = "edit" | "split" | "view";
 
 interface Tab {
   path: string;
@@ -32,14 +43,20 @@ interface Tab {
   button: HTMLElement;
   /** 이 탭의 mermaid를 마지막으로 그린 실효 테마. 현재 테마와 다르면 활성화될 때 다시 그린다. */
   renderedTheme: Effective | null;
-  /** 편집 모드는 탭별 상태다. */
-  editing: boolean;
+  mode: Mode;
   editorHost: HTMLElement;
-  /** 편집 모드에 처음 들어갈 때 만든다 — 뷰어로만 쓰는 탭은 CM6를 만들지 않는다. */
+  /** 편집이 처음 필요할 때 만든다 — 뷰어로만 쓰는 탭은 CM6를 만들지 않는다. */
   editor: EditorView | null;
   /** 현재 원문. 편집하면 갱신된다. */
   source: string;
   previewTimer: number | undefined;
+  /** 편집 전용 모드에서 미뤄둔 프리뷰 갱신이 있는지. */
+  previewStale: boolean;
+  /** 저장되지 않은 변경이 있는지. */
+  dirty: boolean;
+  /** 마지막으로 읽거나 저장한 시점의 파일 수정 시각 — 외부 변경 감지에 쓴다. */
+  mtimeMs: number;
+  dirtyDot: HTMLElement;
 }
 
 const tabs: Tab[] = [];
@@ -47,6 +64,10 @@ let activePath: string | null = null;
 let choice: Choice = "system";
 let effective: Effective = "light";
 const themeButtons = new Map<Choice, HTMLElement>();
+const modeButtons = new Map<Mode, HTMLElement>();
+let formatButtons: HTMLButtonElement[] = [];
+let menuButtons: HTMLButtonElement[] = [];
+let openPop: HTMLElement | null = null;
 
 let tabbarEl: HTMLElement;
 let panesEl: HTMLElement;
@@ -82,7 +103,7 @@ function activate(path: string): void {
   }
   emptyEl.hidden = tabs.length > 0;
 
-  syncEditToggle();
+  syncToolbar();
 
   // 감춰진 동안 테마가 바뀐 탭은 이 시점에 따라잡는다 (전체 탭을 즉시 재렌더하지 않는 이유).
   const tab = findTab(path);
@@ -91,27 +112,84 @@ function activate(path: string): void {
   }
 }
 
-let editToggleEl: HTMLElement | null = null;
-
-function syncEditToggle(): void {
-  const tab = activePath ? findTab(activePath) : undefined;
-  const on = tab?.editing ?? false;
-  editToggleEl?.setAttribute("aria-pressed", String(on));
+function markDirty(tab: Tab, dirty: boolean): void {
+  tab.dirty = dirty;
+  tab.dirtyDot.hidden = !dirty;
 }
 
-/** 편집 모드를 켜고 끈다. CM6 인스턴스는 처음 켤 때 만든다. */
-function toggleEditing(tab: Tab): void {
-  tab.editing = !tab.editing;
-  tab.editorHost.hidden = !tab.editing;
+/** 활성 탭을 저장한다. 외부에서 파일이 바뀌어 있으면 확인을 받고 덮어쓴다. */
+async function saveActive(force = false): Promise<void> {
+  if (!activePath) return;
+  const tab = findTab(activePath);
+  if (!tab || !tab.dirty) return;
 
-  if (tab.editing && !tab.editor) {
+  try {
+    const outcome = await invoke<SaveOutcome>("write_markdown", {
+      path: tab.path,
+      text: tab.source,
+      expectedMtimeMs: tab.mtimeMs,
+      force,
+    });
+    if (outcome.conflict) {
+      const overwrite = await confirmDialog({
+        message: `${basename(tab.path)} 파일이 외부에서 변경되었습니다.\n덮어쓰면 그 변경이 사라집니다.`,
+        confirmLabel: "덮어쓰기",
+      });
+      if (overwrite) await saveActive(true);
+      return;
+    }
+    tab.mtimeMs = outcome.mtime_ms;
+    markDirty(tab, false);
+  } catch (e) {
+    notify(String(e));
+  }
+}
+
+/** 미저장 문서를 잃기 전에 확인을 받는다. 진행해도 되면 true. */
+async function confirmDiscard(tab: Tab): Promise<boolean> {
+  if (!tab.dirty) return true;
+  return confirmDialog({
+    message: `${basename(tab.path)}에 저장하지 않은 변경이 있습니다.\n닫으면 사라집니다.`,
+    confirmLabel: "저장하지 않고 닫기",
+  });
+}
+
+/** 모드 라디오 중 활성 탭의 모드만 켜고, 보기 전용이면 서식 버튼을 잠근다. */
+function syncToolbar(): void {
+  const tab = activePath ? findTab(activePath) : undefined;
+  const mode = tab?.mode ?? "view";
+  for (const [value, button] of modeButtons) {
+    const selected = value === mode;
+    button.setAttribute("aria-checked", String(selected));
+    button.classList.toggle("active", selected);
+  }
+  const locked = !tab || mode === "view";
+  for (const button of formatButtons) button.disabled = locked;
+  for (const button of menuButtons) button.disabled = locked;
+  if (locked) closePopover();
+}
+
+/** 모드에 따라 에디터와 프리뷰의 표시를 정한다. CM6는 편집이 처음 필요할 때 만든다. */
+function applyMode(tab: Tab): void {
+  tab.editorHost.hidden = tab.mode === "view";
+  tab.preview.hidden = tab.mode === "edit";
+
+  if (tab.mode !== "view" && !tab.editor) {
     tab.editor = createEditor(tab.editorHost, tab.source, effective, (next) => {
       tab.source = next;
+      markDirty(tab, true);
       schedulePreview(tab);
     });
   }
-  if (tab.editing) tab.editor?.focus();
-  syncEditToggle();
+  // 편집 전용에서 미뤄둔 갱신이 있으면 프리뷰가 다시 보이는 지금 따라잡는다.
+  if (tab.mode !== "edit" && tab.previewStale) renderPreview(tab);
+  if (tab.mode !== "view") tab.editor?.focus();
+}
+
+function setMode(tab: Tab, mode: Mode): void {
+  tab.mode = mode;
+  applyMode(tab);
+  syncToolbar();
 }
 
 /**
@@ -121,9 +199,19 @@ function toggleEditing(tab: Tab): void {
 function schedulePreview(tab: Tab): void {
   window.clearTimeout(tab.previewTimer);
   tab.previewTimer = window.setTimeout(() => {
-    renderInto(tab.body, tab.source, tab.path);
-    void paintMermaid(tab);
+    // 편집 전용에서는 프리뷰가 감춰져 있다 — 헛일을 피해 미뤄두고 모드가 바뀔 때 따라잡는다.
+    if (tab.mode === "edit") {
+      tab.previewStale = true;
+      return;
+    }
+    renderPreview(tab);
   }, 250);
+}
+
+function renderPreview(tab: Tab): void {
+  tab.previewStale = false;
+  renderInto(tab.body, tab.source, tab.path);
+  void paintMermaid(tab);
 }
 
 async function paintMermaid(tab: Tab): Promise<void> {
@@ -141,6 +229,14 @@ function applyTheme(): void {
   }
   const active = activePath ? findTab(activePath) : undefined;
   if (active) void paintMermaid(active);
+}
+
+/** 닫기 요청 — 미저장이면 확인을 받고, 승인되면 실제로 닫는다. */
+async function requestCloseTab(path: string): Promise<void> {
+  const tab = findTab(path);
+  if (!tab) return;
+  if (!(await confirmDiscard(tab))) return;
+  closeTab(path);
 }
 
 function closeTab(path: string): void {
@@ -177,6 +273,12 @@ function createTabButton(path: string): HTMLElement {
   label.textContent = basename(path);
   button.appendChild(label);
 
+  const dot = document.createElement("span");
+  dot.className = "tab-dirty";
+  dot.hidden = true;
+  dot.dataset.role = "dirty";
+  button.appendChild(dot);
+
   const close = document.createElement("button");
   close.className = "tab-close";
   close.type = "button";
@@ -184,7 +286,7 @@ function createTabButton(path: string): HTMLElement {
   close.setAttribute("aria-label", `${basename(path)} 닫기`);
   close.addEventListener("click", (event) => {
     event.stopPropagation();
-    closeTab(path);
+    void requestCloseTab(path);
   });
   button.appendChild(close);
 
@@ -193,7 +295,7 @@ function createTabButton(path: string): HTMLElement {
   button.addEventListener("auxclick", (event) => {
     if (event.button !== 1) return;
     event.preventDefault();
-    closeTab(path);
+    void requestCloseTab(path);
   });
   return button;
 }
@@ -247,11 +349,15 @@ async function openPath(path: string): Promise<void> {
     body,
     button,
     renderedTheme: null,
-    editing: false,
+    mode: "view",
     editorHost,
     editor: null,
     source: doc.text,
     previewTimer: undefined,
+    previewStale: false,
+    dirty: false,
+    mtimeMs: doc.mtime_ms,
+    dirtyDot: button.querySelector<HTMLElement>('[data-role="dirty"]')!,
   };
   tabs.push(tab);
   activate(doc.path);
@@ -293,6 +399,108 @@ function installThemeControl(): void {
   choice = readChoice();
   syncThemeControl();
   applyTheme();
+}
+
+/** 보기 모드 세그먼트를 배선한다. 모드는 탭별이므로 활성 탭에만 적용된다. */
+function installViewModeControl(): void {
+  for (const button of document.querySelectorAll<HTMLElement>("#view-mode [data-mode]")) {
+    const value = button.dataset.mode as Mode;
+    modeButtons.set(value, button);
+    button.addEventListener("click", () => {
+      const tab = activePath ? findTab(activePath) : undefined;
+      if (tab && tab.mode !== value) setMode(tab, value);
+    });
+  }
+}
+
+function activeEditor(): EditorView | null {
+  return (activePath ? findTab(activePath)?.editor : null) ?? null;
+}
+
+function closePopover(): void {
+  if (!openPop) return;
+  openPop.hidden = true;
+  document
+    .querySelector(`[data-popover="${openPop.dataset.popoverFor}"]`)
+    ?.setAttribute("aria-expanded", "false");
+  openPop = null;
+  // 팝오버가 닫히면 커서를 편집기로 돌려준다 — 안 그러면 다음 타이핑이 사라진다.
+  activeEditor()?.focus();
+}
+
+/** 헤딩 팝오버는 열릴 때 커서가 있는 줄의 레벨을 선택 상태로 보여준다. */
+function syncHeadingItems(pop: HTMLElement): void {
+  const editor = activeEditor();
+  const level = editor ? activeHeading(editor.state) : 0;
+  for (const item of pop.querySelectorAll<HTMLElement>("[data-format]")) {
+    const value = Number(item.dataset.format!.slice(1));
+    item.setAttribute("aria-checked", String(value === level));
+  }
+}
+
+/**
+ * 드롭다운을 배선한다. 네이티브 select가 아이콘 툴바와 어울리지 않아 직접 만들었으므로
+ * 바깥 클릭·Esc·화살표 이동·포커스 복귀를 전부 여기서 책임진다.
+ */
+function installPopovers(): void {
+  menuButtons = [...document.querySelectorAll<HTMLButtonElement>("#format [data-popover]")];
+  for (const trigger of menuButtons) {
+    const pop = document.querySelector<HTMLElement>(
+      `.popover[data-popover-for="${trigger.dataset.popover}"]`,
+    )!;
+    trigger.addEventListener("mousedown", (event) => event.preventDefault());
+    trigger.addEventListener("click", () => {
+      if (openPop === pop) {
+        closePopover();
+        return;
+      }
+      closePopover();
+      if (trigger.dataset.popover === "heading") syncHeadingItems(pop);
+      pop.hidden = false;
+      trigger.setAttribute("aria-expanded", "true");
+      openPop = pop;
+      pop.querySelector<HTMLElement>("[data-format]")?.focus();
+    });
+
+    pop.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closePopover();
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      event.preventDefault();
+      const items = [...pop.querySelectorAll<HTMLElement>("[data-format]")];
+      const at = items.indexOf(document.activeElement as HTMLElement);
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      items[(at + step + items.length) % items.length]?.focus();
+    });
+  }
+
+  // 바깥 클릭으로 닫는다. 트리거 자신의 클릭은 위 토글이 처리하므로 여기서 제외한다.
+  document.addEventListener("click", (event) => {
+    if (!openPop) return;
+    const target = event.target as HTMLElement;
+    if (openPop.contains(target) || target.closest("[data-popover]")) return;
+    closePopover();
+  });
+}
+
+/** 서식 버튼을 배선한다. 변환 자체는 format.ts가 상태만 보고 계산한다. */
+function installFormatControl(): void {
+  formatButtons = [...document.querySelectorAll<HTMLButtonElement>("#format [data-format]")];
+  for (const button of formatButtons) {
+    const id = button.dataset.format as FormatId;
+    // 눌러도 편집기가 포커스를 잃지 않아야 선택 영역이 살아 있다.
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => {
+      const editor = activePath ? findTab(activePath)?.editor : undefined;
+      if (!editor) return;
+      editor.dispatch(applyFormat(editor.state, id));
+      closePopover();
+      editor.focus();
+    });
+  }
 }
 
 /** 세 버튼 중 현재 선택 하나만 켜진 상태로 맞춘다. */
@@ -362,12 +570,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   panesEl = document.querySelector<HTMLElement>("#panes")!;
   emptyEl = document.querySelector<HTMLElement>("#empty")!;
   noticeEl = document.querySelector<HTMLElement>("#notice")!;
-  editToggleEl = document.querySelector<HTMLElement>("#edit-toggle");
-  editToggleEl?.addEventListener("click", () => {
-    const tab = activePath ? findTab(activePath) : undefined;
-    if (tab) toggleEditing(tab);
-  });
-
+  installViewModeControl();
+  installFormatControl();
+  installPopovers();
+  syncToolbar();
   installThemeControl();
 
   // 사용자 토글과 OS 변경이 같은 진입점으로 들어온다 — 한쪽만 mermaid 재렌더를 잊는 일이 없도록.
@@ -386,10 +592,11 @@ window.addEventListener("DOMContentLoaded", async () => {
       return;
     }
     // ⌘E는 기본 메뉴에 없으므로 여기서 잡힌다 (⌘W와 달리 메뉴 재조립이 불필요).
+    // 가장 흔한 왕복인 분할 ↔ 보기 전용을 토글한다 — 편집 전용은 툴바로만 간다.
     if (key === "e") {
       event.preventDefault();
       const tab = activePath ? findTab(activePath) : undefined;
-      if (tab) toggleEditing(tab);
+      if (tab) setMode(tab, tab.mode === "view" ? "split" : "view");
     }
   });
 
@@ -409,13 +616,36 @@ window.addEventListener("DOMContentLoaded", async () => {
   await listen("close-tab", () => {
     // 탭이 하나 남았을 때 창을 닫는 판단은 closeTab 안에 있다 — 가운데 클릭도 같은 경로를 탄다.
     if (activePath) {
-      closeTab(activePath);
+      void requestCloseTab(activePath);
       return;
     }
     void getCurrentWindow().close();
   });
-  await listen("close-window", () => void getCurrentWindow().close());
+  // ⌘S는 메뉴 가속기다 — macOS는 메뉴 키 등가물을 webview보다 먼저 처리하므로
+  // keydown으로 잡으려 해도 오지 않는다(⌘W와 같은 이유).
+  await listen("save", () => void saveActive());
+  await listen("close-window", () => void requestCloseWindow());
+
+  // Rust가 창 닫기를 막고 넘긴 요청 — 미저장 문서가 있으면 확인을 받는다.
+  await listen("close-requested", () => void requestCloseWindow());
 });
+
+/** 창을 닫아도 되는지 확인한 뒤 닫는다. 미저장 탭이 여러 개면 한 번만 묻는다. */
+async function requestCloseWindow(): Promise<void> {
+  const dirty = tabs.filter((t) => t.dirty);
+  if (dirty.length > 0) {
+    const names = dirty.map((t) => basename(t.path)).join(", ");
+    const discard = await confirmDialog({
+      message: `저장하지 않은 변경이 있습니다: ${names}\n창을 닫으면 사라집니다.`,
+      confirmLabel: "저장하지 않고 닫기",
+    });
+    if (!discard) return;
+  }
+  for (const tab of tabs) markDirty(tab, false);
+  // Rust가 다음 닫기 요청 한 번을 통과시키도록 알린다 — 그러지 않으면 다시 막힌다.
+  await invoke("allow_close");
+  await getCurrentWindow().close();
+}
 
 async function drainPendingFiles(): Promise<void> {
   const paths = await invoke<string[]>("take_pending_files");

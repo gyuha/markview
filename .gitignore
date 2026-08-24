@@ -31,3 +31,4 @@ dist-ssr
 !.forge/codebase/
 !.forge/config.json
 !.forge/branch/
+harness/.generated/

@@ -1,12 +1,14 @@
 {
   "name": "markview",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "test:format": "node harness/format.ts",
+    "harness": "node harness/build-mocked.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

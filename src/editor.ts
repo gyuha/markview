@@ -10,6 +10,7 @@ import {
   keymap,
   lineNumbers,
 } from "@codemirror/view";
+import { formatCommand } from "./format";
 import type { Effective } from "./theme";
 
 /** 테마만 바꿔 끼울 수 있도록 격리한다 — 문서와 커서를 잃지 않고 교체된다. */
@@ -90,6 +91,11 @@ export function createEditor(
         highlightActiveLine(),
         highlightActiveLineGutter(),
         history(),
+        // 서식 단축키를 먼저 둬야 기본 키맵보다 우선한다. Edit 메뉴에 없는 키라 충돌하지 않는다.
+        keymap.of([
+          { key: "Mod-b", run: formatCommand("bold") },
+          { key: "Mod-i", run: formatCommand("italic") },
+        ]),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         // 산문 편집에 필수 — 없으면 긴 줄이 가로로 흐른다.
         EditorView.lineWrapping,
