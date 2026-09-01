@@ -11,6 +11,7 @@ import { renderMermaid } from "./mermaid";
 import { dirname, isExternalHref, renderInto, resolvePath } from "./render";
 import {
   applyChrome,
+  applyNativeTheme,
   effectiveOf,
   onSystemChange,
   readChoice,
@@ -219,8 +220,12 @@ async function paintMermaid(tab: Tab): Promise<void> {
   await renderMermaid(tab.body, effective);
 }
 
-/** 실효 테마를 다시 계산해 크롬에 적용하고, 활성 탭의 다이어그램만 즉시 다시 그린다. */
-function applyTheme(): void {
+/**
+ * 실효 테마를 다시 계산해 크롬에 적용하고, 활성 탭의 다이어그램만 즉시 다시 그린다.
+ * 순서가 정확성의 일부다: 네이티브 강제를 먼저 풀어야 matchMedia가 진짜 OS 값을 보고한다.
+ */
+async function applyTheme(): Promise<void> {
+  await applyNativeTheme(choice);
   effective = effectiveOf(choice);
   applyChrome(effective);
   // 다섯 번째 겹: 열려 있는 모든 에디터. CM6는 문서를 유지한 채 테마만 교체된다.
@@ -392,13 +397,13 @@ function installThemeControl(): void {
       choice = value;
       saveChoice(choice);
       syncThemeControl();
-      applyTheme();
+      void applyTheme();
     });
   }
 
   choice = readChoice();
   syncThemeControl();
-  applyTheme();
+  void applyTheme();
 }
 
 /** 보기 모드 세그먼트를 배선한다. 모드는 탭별이므로 활성 탭에만 적용된다. */
@@ -578,7 +583,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   // 사용자 토글과 OS 변경이 같은 진입점으로 들어온다 — 한쪽만 mermaid 재렌더를 잊는 일이 없도록.
   onSystemChange(() => {
-    if (choice === "system") applyTheme();
+    if (choice === "system") void applyTheme();
   });
 
   installLinkHandler();
