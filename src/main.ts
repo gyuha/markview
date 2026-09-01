@@ -73,6 +73,8 @@ let choice: Choice = "system";
 let effective: Effective = "light";
 const themeButtons = new Map<Choice, HTMLElement>();
 const modeButtons = new Map<Mode, HTMLElement>();
+/** 수정자 없는 F키 → 보기 모드. 메뉴에 F키 가속기가 없어 keydown으로 잡힌다. */
+const fkeyModes: Record<string, Mode> = { F1: "edit", F2: "split", F3: "view" };
 let formatButtons: HTMLButtonElement[] = [];
 let menuButtons: HTMLButtonElement[] = [];
 let openPop: HTMLElement | null = null;
@@ -726,6 +728,18 @@ window.addEventListener("DOMContentLoaded", async () => {
   installLinkHandler();
 
   window.addEventListener("keydown", (event) => {
+    // 모달이 떠 있으면 전역 단축키를 통째로 막는다 — confirmDialog은 Esc/Enter 외의 키를
+    // 통과시키므로, 막지 않으면 모드 전환의 editor.focus()가 모달의 포커스를 훔친다.
+    if (document.querySelector(".modal-backdrop")) return;
+    // 수정자 없는 F1~F3은 보기 모드로 직행한다. macOS 내장 키보드에서는 시스템이
+    // 밝기·Mission Control로 먼저 먹으므로 fn을 함께 눌러야 한다 — 코드로는 못 고친다.
+    const fkeyMode = fkeyModes[event.key];
+    if (fkeyMode && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+      event.preventDefault();
+      const tab = activePath ? findTab(activePath) : undefined;
+      if (tab && tab.mode !== fkeyMode) setMode(tab, fkeyMode);
+      return;
+    }
     if (!(event.metaKey || event.ctrlKey)) return;
     const key = event.key.toLowerCase();
     if (key === "r") {
