@@ -315,6 +315,14 @@ body {
   min-height: 0;
 }
 
+/*
+ * display를 지정한 순간 UA의 [hidden]{display:none}을 이겨버리므로(저작자 origin 우선)
+ * 명시적으로 되돌린다. 이걸 빠뜨려서 탭 여러 개가 겹쳐 보였다 — #empty와 같은 함정이다.
+ */
+.pane[hidden] {
+  display: none;
+}
+
 /* 스크롤 컨테이너는 프리뷰 쪽이다 (분할 전에는 페인 전폭을 쓴다). */
 .preview {
   flex: 1 1 50%;

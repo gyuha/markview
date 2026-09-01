@@ -30,6 +30,29 @@ const md = new MarkdownIt({
   },
 });
 
+/**
+ * 블록마다 원문 시작 줄을 `data-line`으로 남긴다 — 분할 모드 스크롤 동기화의 앵커다.
+ * `token.map`은 top-level 블록과 목록 항목에 있고, 목록 항목까지 심는 이유는 긴 목록이
+ * 앵커 하나가 되면 그 안에서 비율 보간으로 되돌아가 어긋나기 때문이다.
+ */
+md.core.ruler.push("line-anchors", (state) => {
+  for (const token of state.tokens) {
+    if (token.nesting === 1 && token.map) token.attrSet("data-line", String(token.map[0]));
+  }
+});
+
+/**
+ * fence는 위 core 룰로 덮을 수 없다. markdown-it의 fence 규칙은 highlight가 완성된 `<pre>`를
+ * 돌려주면 그것을 그대로 반환하고(토큰 속성 무시), 아니면 속성을 `<code>`에 붙인다 — 어느 쪽도
+ * `<pre>`에 앵커를 남기지 않는다. 그래서 결과 HTML의 바깥 태그에 직접 끼운다.
+ */
+const defaultFence = md.renderer.rules.fence!;
+md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+  const html = defaultFence(tokens, idx, options, env, self);
+  const line = tokens[idx].map?.[0];
+  return line == null ? html : html.replace("<pre", `<pre data-line="${line}"`);
+};
+
 md.use(anchor);
 md.use(taskLists, { enabled: false, label: true });
 // frontmatter는 콜백으로 넘겨받고 출력에서는 제거된다. 지금은 쓰지 않는다.
@@ -83,6 +106,9 @@ function extractMermaidBlocks(container: HTMLElement): void {
     const holder = document.createElement("div");
     holder.className = "mermaid-block";
     holder.dataset.mermaid = code.textContent ?? "";
+    // `<pre>`를 버리면 그 위의 스크롤 앵커도 같이 사라진다 — 옮겨 담는다.
+    const line = pre.getAttribute("data-line");
+    if (line !== null) holder.dataset.line = line;
     pre.replaceWith(holder);
   }
 }

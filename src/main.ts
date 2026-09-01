@@ -2,7 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { EditorView } from "@codemirror/view";
+// 값으로 가져온다 — scrollIntoView 이펙트를 쓴다. editor.ts가 이미 번들에 넣으므로 크기 변화는 없다.
+import { EditorView } from "@codemirror/view";
 import { applyEditorTheme, createEditor } from "./editor";
 import { activeHeading, applyFormat, type FormatId } from "./format";
 import { confirmDialog } from "./modal";
@@ -53,6 +54,12 @@ interface Tab {
   previewTimer: number | undefined;
   /** 편집 전용 모드에서 미뤄둔 프리뷰 갱신이 있는지. */
   previewStale: boolean;
+  /**
+   * 상대편에 밀어 넣은 줄. 그 값으로 돌아오는 scroll 이벤트는 메아리이므로 무시한다.
+   * 시간 기반 가드로는 막을 수 없다 — CM6의 scrollIntoView는 measure 단계에서 적용돼
+   * 다음 프레임 이후에 스크롤하므로 rAF로 내린 플래그를 통과한다 (하네스가 실측).
+   */
+  syncEcho: { side: "editor" | "preview"; line: number } | null;
   /** 저장되지 않은 변경이 있는지. */
   dirty: boolean;
   /** 마지막으로 읽거나 저장한 시점의 파일 수정 시각 — 외부 변경 감지에 쓴다. */
@@ -181,6 +188,7 @@ function applyMode(tab: Tab): void {
       markDirty(tab, true);
       schedulePreview(tab);
     });
+    attachEditorScrollSync(tab);
   }
   // 편집 전용에서 미뤄둔 갱신이 있으면 프리뷰가 다시 보이는 지금 따라잡는다.
   if (tab.mode !== "edit" && tab.previewStale) renderPreview(tab);
@@ -211,8 +219,135 @@ function schedulePreview(tab: Tab): void {
 
 function renderPreview(tab: Tab): void {
   tab.previewStale = false;
+  // innerHTML을 갈아끼우면 내용 높이가 순간 0이 되어 브라우저가 scrollTop을 0으로 클램프한다.
+  // 픽셀이 아니라 줄을 기억하는 이유: mermaid가 렌더되며 높이가 바뀌면 픽셀 값은 무의미해진다.
+  const line = previewTopLine(tab);
   renderInto(tab.body, tab.source, tab.path);
-  void paintMermaid(tab);
+  if (line !== null) scrollPreviewToLine(tab, line);
+  // mermaid SVG가 들어오며 높이가 또 바뀌므로 그 뒤에 한 번 더 맞춘다.
+  void paintMermaid(tab).then(() => {
+    if (line !== null) scrollPreviewToLine(tab, line);
+  });
+}
+
+interface Anchor {
+  el: HTMLElement;
+  line: number;
+}
+
+/** 문서 순서(= 위에서 아래) 그대로의 앵커 목록. */
+function anchorList(tab: Tab): Anchor[] {
+  return [...tab.body.querySelectorAll<HTMLElement>("[data-line]")].map((el) => ({
+    el,
+    line: Number(el.dataset.line),
+  }));
+}
+
+/**
+ * 뷰포트 y를 프리뷰의 scrollTop 값으로 바꾸는 기준점.
+ * offsetTop을 쓰지 않는 이유: `.preview`는 position이 없어 offsetTop이 `.pane` 기준으로 잡힌다.
+ */
+function previewBase(tab: Tab): number {
+  return tab.preview.getBoundingClientRect().top - tab.preview.scrollTop;
+}
+
+/** 프리뷰 최상단에 걸린 원문 줄(0-based, 앵커 사이는 보간). */
+function previewTopLine(tab: Tab): number | null {
+  const anchors = anchorList(tab);
+  if (anchors.length === 0) return null;
+  const base = previewBase(tab);
+  const top = tab.preview.scrollTop;
+  let prev = anchors[0];
+  for (const a of anchors) {
+    const offset = a.el.getBoundingClientRect().top - base;
+    if (offset <= top) {
+      prev = a;
+      continue;
+    }
+    const prevOffset = prev.el.getBoundingClientRect().top - base;
+    const span = offset - prevOffset;
+    const frac = span <= 0 ? 0 : (top - prevOffset) / span;
+    return prev.line + (a.line - prev.line) * frac;
+  }
+  return prev.line;
+}
+
+/** 원문 줄에 대응하는 프리뷰의 scrollTop. 앵커 사이는 선형 보간한다. */
+function previewOffsetForLine(tab: Tab, line: number): number | null {
+  const anchors = anchorList(tab);
+  if (anchors.length === 0) return null;
+  const base = previewBase(tab);
+  let prev = anchors[0];
+  for (const a of anchors) {
+    if (a.line <= line) {
+      prev = a;
+      continue;
+    }
+    const prevTop = prev.el.getBoundingClientRect().top - base;
+    const nextTop = a.el.getBoundingClientRect().top - base;
+    const span = a.line - prev.line;
+    const frac = span === 0 ? 0 : (line - prev.line) / span;
+    return prevTop + (nextTop - prevTop) * frac;
+  }
+  return prev.el.getBoundingClientRect().top - base;
+}
+
+function scrollPreviewToLine(tab: Tab, line: number): void {
+  const offset = previewOffsetForLine(tab, line);
+  if (offset === null) return;
+  tab.preview.scrollTop = offset;
+}
+
+/** 에디터 최상단에 걸린 줄(0-based — data-line과 같은 기준). */
+function editorTopLine(tab: Tab): number | null {
+  const view = tab.editor;
+  if (!view) return null;
+  // lineBlockAtHeight는 문서 top 기준 높이를 받는다. documentTop은 화면 좌표계다.
+  const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop;
+  const block = view.lineBlockAtHeight(height);
+  return view.state.doc.lineAt(block.from).number - 1;
+}
+
+function scrollEditorToLine(tab: Tab, line: number): void {
+  const view = tab.editor;
+  if (!view) return;
+  const n = Math.min(Math.max(Math.round(line) + 1, 1), view.state.doc.lines);
+  view.dispatch({
+    effects: EditorView.scrollIntoView(view.state.doc.line(n).from, { y: "start" }),
+  });
+}
+
+/**
+ * 방금 이 쪽에 밀어 넣은 값으로 돌아온 scroll 이벤트인지. 맞으면 메아리이므로 되밀지 않는다.
+ * 같은 쪽 이벤트가 오면 기대값은 어긋나든 맞든 소진한다 — 메아리가 오지 않는 경우
+ * (이미 그 위치여서 스크롤이 없었던 경우) 기대값이 남아 다음 스크롤을 삼키지 않도록.
+ */
+function isSyncEcho(tab: Tab, side: "editor" | "preview", line: number): boolean {
+  const echo = tab.syncEcho;
+  if (!echo || echo.side !== side) return false;
+  tab.syncEcho = null;
+  return Math.abs(echo.line - line) <= 1.5;
+}
+
+/** 프리뷰 쪽 리스너. 에디터 쪽은 CM6가 만들어진 뒤에 붙는다(attachEditorScrollSync). */
+function installScrollSync(tab: Tab): void {
+  tab.preview.addEventListener("scroll", () => {
+    if (tab.mode !== "split") return;
+    const line = previewTopLine(tab);
+    if (line === null || isSyncEcho(tab, "preview", line)) return;
+    tab.syncEcho = { side: "editor", line };
+    scrollEditorToLine(tab, line);
+  });
+}
+
+function attachEditorScrollSync(tab: Tab): void {
+  tab.editor?.scrollDOM.addEventListener("scroll", () => {
+    if (tab.mode !== "split") return;
+    const line = editorTopLine(tab);
+    if (line === null || isSyncEcho(tab, "editor", line)) return;
+    tab.syncEcho = { side: "preview", line };
+    scrollPreviewToLine(tab, line);
+  });
 }
 
 async function paintMermaid(tab: Tab): Promise<void> {
@@ -360,11 +495,13 @@ async function openPath(path: string): Promise<void> {
     source: doc.text,
     previewTimer: undefined,
     previewStale: false,
+    syncEcho: null,
     dirty: false,
     mtimeMs: doc.mtime_ms,
     dirtyDot: button.querySelector<HTMLElement>('[data-role="dirty"]')!,
   };
   tabs.push(tab);
+  installScrollSync(tab);
   activate(doc.path);
   await paintMermaid(tab);
 }
