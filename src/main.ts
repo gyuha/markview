@@ -8,6 +8,7 @@ import { applyEditorTheme, createEditor } from "./editor";
 import { activeHeading, applyFormat, type FormatId } from "./format";
 import { confirmDialog } from "./modal";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { renderMermaid } from "./mermaid";
 import { dirname, isExternalHref, renderInto, resolvePath } from "./render";
 import {
@@ -657,6 +658,32 @@ function syncThemeControl(): void {
 }
 
 /**
+ * 코드블록 복사 버튼. 프리뷰는 재렌더마다 innerHTML을 갈아끼워 버튼이 매번 새로 생기므로
+ * 버튼마다 리스너를 달면 안 된다 — 컨테이너에 한 번만 위임한다(링크 핸들러와 같은 이유).
+ * 클립보드는 웹 API가 아니라 플러그인으로 쓴다 (ADR 260902-105509).
+ */
+function installCopyHandler(): void {
+  panesEl.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement | null)?.closest<HTMLElement>(".copy-btn");
+    if (!button) return;
+    // `<pre>`가 아니라 `<code>`를 읽는다 — 버튼이 `<pre>`의 자식이라 pre.textContent에는 섞인다.
+    const code = button.parentElement?.querySelector("code");
+    void copyToClipboard(button, code?.textContent ?? "");
+  });
+}
+
+async function copyToClipboard(button: HTMLElement, text: string): Promise<void> {
+  try {
+    await writeText(text);
+  } catch (e) {
+    notify(`복사하지 못했습니다: ${e}`);
+    return;
+  }
+  button.dataset.copied = "";
+  window.setTimeout(() => delete button.dataset.copied, 1500);
+}
+
+/**
  * 링크 클릭을 전부 가로챈다. 그냥 두면 webview가 그 주소로 네비게이션해서
  * 앱이 브라우저로 변하고 돌아올 방법이 없다.
  */
@@ -726,6 +753,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   installLinkHandler();
+  installCopyHandler();
 
   window.addEventListener("keydown", (event) => {
     // 모달이 떠 있으면 전역 단축키를 통째로 막는다 — confirmDialog은 Esc/Enter 외의 키를

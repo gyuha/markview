@@ -92,6 +92,32 @@ export function renderInto(container: HTMLElement, markdown: string, docPath: st
   container.innerHTML = DOMPurify.sanitize(dirty);
   rewriteRelativeImages(container, dirname(docPath));
   extractMermaidBlocks(container);
+  addCopyButtons(container);
+}
+
+/** 두 아이콘을 함께 넣고 CSS가 `data-copied`로 하나만 보인다. 툴바와 같은 인라인 SVG 방식. */
+const COPY_ICONS =
+  '<svg class="icon-copy" viewBox="0 0 24 24" aria-hidden="true">' +
+  '<rect x="9" y="9" width="11" height="11" rx="2" />' +
+  '<path d="M5 15V5a2 2 0 0 1 2-2h8" /></svg>' +
+  '<svg class="icon-check" viewBox="0 0 24 24" aria-hidden="true">' +
+  '<path d="M5 13l4 4L19 7" /></svg>';
+
+/**
+ * 코드블록마다 복사 버튼을 단다. mermaid 추출 **뒤에** 도는 것이 중요하다 —
+ * 앞에서 돌면 곧 `<div>`로 치환돼 버려질 `<pre>`에도 버튼을 붙이는 헛일이 된다.
+ * sanitize 이후라 여기서 만드는 요소는 DOMPurify에 지워지지 않는다.
+ */
+function addCopyButtons(container: HTMLElement): void {
+  for (const pre of Array.from(container.querySelectorAll("pre"))) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "copy-btn";
+    button.setAttribute("aria-label", "코드 복사");
+    button.title = "복사";
+    button.innerHTML = COPY_ICONS;
+    pre.prepend(button);
+  }
 }
 
 /**

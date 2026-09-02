@@ -462,6 +462,61 @@ body {
   overflow-x: auto;
   background: var(--code-bg);
   border-radius: 6px;
+  /* 복사 버튼의 위치 기준. absolute라 흐름에서 빠지므로 높이와 스크롤 앵커에는 영향이 없다. */
+  position: relative;
+}
+
+/* 코드블록 복사 버튼 — 평소엔 숨고 블록에 hover하거나 키보드로 포커스하면 드러난다. */
+.copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  cursor: pointer;
+}
+
+.markdown-body pre:hover .copy-btn,
+.copy-btn:focus-visible {
+  opacity: 1;
+}
+
+.copy-btn:hover {
+  color: var(--fg);
+}
+
+.copy-btn svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+  margin: auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 복사되면 체크로 바꿔 보여준다 — 같은 자리에서 즉시 읽힌다. */
+.copy-btn .icon-check,
+.copy-btn[data-copied] .icon-copy {
+  display: none;
+}
+
+.copy-btn[data-copied] .icon-check {
+  display: block;
+}
+
+.copy-btn[data-copied] {
+  color: #1a7f37;
+  opacity: 1;
 }
 
 .markdown-body pre code {
