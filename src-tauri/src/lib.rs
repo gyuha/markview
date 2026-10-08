@@ -97,10 +97,10 @@ fn read_markdown(
 
     let text = std::fs::read_to_string(&p).map_err(|e| format!("읽을 수 없습니다: {e}"))?;
 
-    // 문서 안의 상대 경로 이미지를 asset protocol로 로드하려면 그 문서의 부모 디렉터리만 허용한다.
+    // 문서 안의 상대 경로 이미지를 asset protocol로 로드하려면 그 문서의 부모 디렉터리와 하위 폴더를 허용한다.
     if let Some(dir) = p.parent() {
         app.asset_protocol_scope()
-            .allow_directory(dir, false)
+            .allow_directory(dir, true)
             .map_err(|e| format!("이미지 경로를 허용할 수 없습니다: {e}"))?;
     }
 
