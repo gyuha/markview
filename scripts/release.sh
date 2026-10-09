@@ -33,7 +33,7 @@ if [[ "${DRY_RUN:-}" != "1" ]]; then
   git fetch -q origin main
   SHA="$(git rev-parse HEAD)"
   [[ "$(git branch --show-current)" == "main" ]] || { echo "main 브랜치에서만 릴리스합니다" >&2; exit 1; }
-  [[ -z "$(git status --porcelain)" ]] || { echo "커밋하지 않은 변경이 있습니다" >&2; exit 1; }
+  [[ -z "$(git status --porcelain --untracked-files=no)" ]] || { echo "커밋하지 않은 변경이 있습니다" >&2; exit 1; }
   [[ "$SHA" == "$(git rev-parse origin/main)" ]] || { echo "origin/main과 다릅니다 (push 또는 pull 먼저)" >&2; exit 1; }
   INFO="$(release_info || true)"
   if [[ -n "$INFO" ]] && [[ "$(cut -f2 <<<"$INFO")" != "true" ]]; then
