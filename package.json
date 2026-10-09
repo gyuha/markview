@@ -9,6 +9,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test:format": "node harness/format.ts",
+    "test:scripts": "node --test scripts/*.test.mjs",
+    "release": "bash scripts/release.sh publish",
     "harness": "node harness/build-mocked.mjs",
     "tauri": "tauri"
   },

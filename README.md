@@ -78,6 +78,8 @@ pnpm tauri build --debug --bundles app  # 빠른 .app 번들 (아이콘·파일 
 
 `pnpm tauri dev`는 `.app` 번들이 아니라 실행 파일을 직접 띄우므로 **Dock 아이콘과 파일 연결이 동작하지 않습니다.** 그 두 가지를 확인하려면 번들 빌드가 필요합니다.
 
+새 버전을 배포하는 방법은 [DEPLOY.md](DEPLOY.md)를 보세요.
+
 ## 제약
 
 - Windows·Linux 미지원 (macOS 전용으로 설계했습니다)
