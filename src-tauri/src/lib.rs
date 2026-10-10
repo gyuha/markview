@@ -153,7 +153,25 @@ fn save_document(
         "{}.markview-tmp",
         p.extension().and_then(|e| e.to_str()).unwrap_or("md")
     ));
-    std::fs::write(&tmp, text.as_bytes()).map_err(|e| format!("쓸 수 없습니다: {e}"))?;
+    // O_EXCL로 연다 — 미리 심어 둔 심볼릭 링크를 따라가 다른 파일을 덮어쓰지 않는다.
+    // 이전에 남은 임시 이름(또는 링크)은 그 이름 자체만 지우고 한 번 더 시도한다.
+    let write_tmp = || -> std::io::Result<()> {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        file.write_all(text.as_bytes())
+    };
+    write_tmp()
+        .or_else(|e| {
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(e);
+            }
+            std::fs::remove_file(&tmp)?;
+            write_tmp()
+        })
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("쓸 수 없습니다: {e}")
+        })?;
     std::fs::rename(&tmp, p).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("저장을 마칠 수 없습니다: {e}")
@@ -475,5 +493,22 @@ mod tests {
         let forced = save_document(&opened, &f, "내 편집", 1, true).unwrap();
         assert!(!forced.conflict);
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "내 편집");
+    }
+
+    #[test]
+    fn 심어_둔_임시_파일_링크를_따라가_다른_파일을_덮어쓰지_않는다() {
+        let d = tmpdir("save-link");
+        let f = d.join("a.md");
+        std::fs::write(&f, "원본").unwrap();
+        let victim = tmpdir("save-link-victim").join("victim.txt");
+        std::fs::write(&victim, "지켜야 할 파일").unwrap();
+        // 문서 이름에서 정해지는 임시 파일 이름에 링크를 미리 심어 둔다(악성 저장소 시나리오).
+        std::os::unix::fs::symlink(&victim, d.join("a.md.markview-tmp")).unwrap();
+        let opened: HashSet<PathBuf> = [f.clone()].into();
+
+        save_document(&opened, &f, "# 새 내용\n", 0, false).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "지켜야 할 파일");
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "# 새 내용\n");
     }
 }
