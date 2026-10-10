@@ -1,14 +1,16 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 // 값으로 가져온다 — scrollIntoView 이펙트를 쓴다. editor.ts가 이미 번들에 넣으므로 크기 변화는 없다.
 import { EditorView } from "@codemirror/view";
+import { isolateHistory } from "@codemirror/commands";
 import { applyEditorTheme, createEditor } from "./editor";
 import { activeHeading, applyFormat, type FormatId } from "./format";
 import { confirmDialog } from "./modal";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import type { MuyaEditor, MuyaHost } from "./muya";
 import { renderMermaid } from "./mermaid";
 import { dirname, isExternalHref, renderInto, resolvePath } from "./render";
 import {
@@ -48,8 +50,13 @@ interface Tab {
   renderedTheme: Effective | null;
   mode: Mode;
   editorHost: HTMLElement;
-  /** 편집이 처음 필요할 때 만든다 — 뷰어로만 쓰는 탭은 CM6를 만들지 않는다. */
+  /** 분할 모드가 처음 필요할 때 만든다 — 뷰어로만 쓰는 탭은 CM6를 만들지 않는다. */
   editor: EditorView | null;
+  /** 편집 전용 모드의 Muya(MarkText 엔진) 자리. 엔진은 편집 전용 모드에 처음 들어갈 때 불러온다. */
+  muyaHost: HTMLElement;
+  muya: MuyaEditor | null;
+  /** Muya가 마지막으로 반영한 원문. `source`와 다르면 분할 모드 등에서 바뀐 것이라 들여야 한다. */
+  muyaSource: string;
   /** 현재 원문. 편집하면 갱신된다. */
   source: string;
   previewTimer: number | undefined;
@@ -79,6 +86,8 @@ const fkeyModes: Record<string, Mode> = { F1: "edit", F2: "split", F3: "view" };
 let formatButtons: HTMLButtonElement[] = [];
 let menuButtons: HTMLButtonElement[] = [];
 let openPop: HTMLElement | null = null;
+/** Muya의 원문을 CM6에 들이는 동안 켠다 — 그 변경은 사용자 편집이 아니다(dispatch는 동기다). */
+let syncingEditor = false;
 
 let tabbarEl: HTMLElement;
 let panesEl: HTMLElement;
@@ -111,8 +120,14 @@ function activate(path: string): void {
     tab.pane.hidden = !selected;
     tab.button.classList.toggle("active", selected);
     tab.button.setAttribute("aria-selected", String(selected));
+    // 감춰지는 탭의 Muya 플로팅 도구(본문 밖 document.body에 붙는다)가 남지 않게 한다.
+    if (!selected) tab.muya?.hideAllFloatTools();
   }
+  // 검색창은 한 탭의 Muya에 묶여 있다 — 탭을 바꾸면 닫고 강조를 지운다.
+  closeMuyaSearch();
   emptyEl.hidden = tabs.length > 0;
+  // Muya는 상대 경로 이미지를 이 전역(현재 문서 폴더) 기준으로 푼다 — 렌더는 활성 탭에서만 일어난다.
+  window.DIRNAME = dirname(path);
 
   syncToolbar();
 
@@ -132,12 +147,15 @@ function markDirty(tab: Tab, dirty: boolean): void {
 async function saveActive(force = false): Promise<void> {
   if (!activePath) return;
   const tab = findTab(activePath);
+  // Muya는 입력을 묶어서 내보낸다 — 저장 직전에 밀어내야 마지막 입력까지 원문에 들어간다.
+  tab?.muya?.flush();
   if (!tab || !tab.dirty) return;
 
+  const text = tab.source;
   try {
     const outcome = await invoke<SaveOutcome>("write_markdown", {
       path: tab.path,
-      text: tab.source,
+      text,
       expectedMtimeMs: tab.mtimeMs,
       force,
     });
@@ -150,7 +168,8 @@ async function saveActive(force = false): Promise<void> {
       return;
     }
     tab.mtimeMs = outcome.mtime_ms;
-    markDirty(tab, false);
+    // 쓰는 동안 들어온 편집(Muya는 입력을 묶어 늦게 내보낸다)은 아직 저장되지 않았다.
+    markDirty(tab, tab.source !== text);
   } catch (e) {
     notify(String(e));
   }
@@ -158,6 +177,7 @@ async function saveActive(force = false): Promise<void> {
 
 /** 미저장 문서를 잃기 전에 확인을 받는다. 진행해도 되면 true. */
 async function confirmDiscard(tab: Tab): Promise<boolean> {
+  tab.muya?.flush();
   if (!tab.dirty) return true;
   return confirmDialog({
     message: `${basename(tab.path)}에 저장하지 않은 변경이 있습니다.\n닫으면 사라집니다.`,
@@ -180,22 +200,126 @@ function syncToolbar(): void {
   if (locked) closePopover();
 }
 
-/** 모드에 따라 에디터와 프리뷰의 표시를 정한다. CM6는 편집이 처음 필요할 때 만든다. */
+/**
+ * 모드에 따라 편집기와 프리뷰의 표시를 정한다. 편집 전용은 Muya(MarkText 엔진),
+ * 분할은 CM6 + 프리뷰. 편집기는 그 모드가 처음 필요할 때 만든다.
+ */
 function applyMode(tab: Tab): void {
-  tab.editorHost.hidden = tab.mode === "view";
+  if (tab.mode !== "edit" && tab.muya) {
+    // 묶여 있던 마지막 입력까지 원문에 넣고 나서 숨긴다 — 아니면 CM이 낡은 원문을 받는다.
+    tab.muya.flush();
+    tab.muya.hideAllFloatTools();
+    closeMuyaSearch();
+  }
+  tab.muyaHost.hidden = tab.mode !== "edit";
+  tab.editorHost.hidden = tab.mode !== "split";
   tab.preview.hidden = tab.mode === "edit";
 
-  if (tab.mode !== "view" && !tab.editor) {
-    tab.editor = createEditor(tab.editorHost, tab.source, effective, (next) => {
-      tab.source = next;
-      markDirty(tab, true);
-      schedulePreview(tab);
-    });
-    attachEditorScrollSync(tab);
+  if (tab.mode === "split") {
+    if (!tab.editor) {
+      tab.editor = createEditor(tab.editorHost, tab.source, effective, (next) => {
+        if (syncingEditor) return;
+        tab.source = next;
+        markDirty(tab, true);
+        schedulePreview(tab);
+      });
+      attachEditorScrollSync(tab);
+    } else {
+      syncEditor(tab);
+    }
   }
+  if (tab.mode === "edit") void showMuya(tab);
   // 편집 전용에서 미뤄둔 갱신이 있으면 프리뷰가 다시 보이는 지금 따라잡는다.
   if (tab.mode !== "edit" && tab.previewStale) renderPreview(tab);
-  if (tab.mode !== "view") tab.editor?.focus();
+  if (tab.mode === "split") tab.editor?.focus();
+}
+
+/**
+ * 원문을 분할 모드의 CM6에 들인다(Muya·다시 읽기에서 바뀐 것). 사용자 편집이 아니므로 수정됨은
+ * 건드리지 않는다. 실행 취소에서는 한 덩어리로 되돌아가게 기록을 끊는다 — 기록에서 빼 버리면 CM이
+ * 이전 편집을 이 변경 너머로 매핑해, 지운 글자가 문서 끝에 되살아난다.
+ */
+function syncEditor(tab: Tab): void {
+  const view = tab.editor;
+  if (!view || view.state.doc.toString() === tab.source) return;
+  syncingEditor = true;
+  try {
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: tab.source },
+      annotations: isolateHistory.of("full"),
+    });
+  } finally {
+    syncingEditor = false;
+  }
+}
+
+const IMAGE_PATH = /\.(png|jpe?g|gif|svg|webp)$/i;
+
+/**
+ * 파일을 놓은 자리가 편집 전용 모드의 Muya 위면 그 편집기. 놓은 지점에 캐럿을 둔다 — 엔진의 pasteImage는
+ * 실제 DOM 선택에서 넣을 블록을 읽는다. 타입은 PhysicalPosition이지만 macOS(wry)는 창 기준 포인트 좌표를
+ * 그대로 담아 보낸다(wkwebview/drag_drop.rs의 draggingLocation) — 배율로 나누지 않는다.
+ */
+function imageDropTarget(position: { x: number; y: number }): MuyaEditor | null {
+  const tab = activePath ? findTab(activePath) : undefined;
+  if (tab?.mode !== "edit" || !tab.muya) return null;
+  const { x, y } = position;
+  if (!document.elementFromPoint(x, y)?.closest(".muya-host")) return null;
+  const range = document.caretRangeFromPoint?.(x, y);
+  if (range && tab.muya.domNode.contains(range.startContainer)) {
+    getSelection()?.removeAllRanges();
+    getSelection()?.addRange(range);
+  }
+  return tab.muya;
+}
+
+/** 편집 전용 모드의 검색창을 닫는다. 엔진을 아직 불러오지 않았으면 열린 검색창도 없다. */
+function closeMuyaSearch(): void {
+  if (tabs.some((t) => t.muya)) void import("./muya").then(({ closeSearch }) => closeSearch());
+}
+
+/** Muya 플러그인이 부르는 앱 동작. 탭을 붙잡지 않도록 모듈 수준에 하나만 둔다. */
+const muyaAppHost: MuyaHost = {
+  openLink(href) {
+    if (!href.startsWith("#")) openHref(href);
+  },
+  docPath: () => activePath,
+  notify,
+};
+
+/**
+ * 편집 전용 모드에 Muya를 띄운다. 엔진은 처음 필요할 때 불러온다 — 뷰어로만 쓰면 내려받지 않는다.
+ * 원문은 사용자 편집 때만 Muya 쪽에서 갱신된다: 편집 없이 모드만 오가면 재직렬화가 일어나지 않는다.
+ */
+async function showMuya(tab: Tab): Promise<void> {
+  const { createMuya, syncMuya } = await import("./muya");
+  // 불러오는 사이 탭이 닫혔으면 손대지 않는다.
+  if (!tabs.includes(tab)) return;
+  if (!tab.muya) {
+    tab.muyaSource = tab.source;
+    // Muya는 안쪽 마운트 요소를 자기 편집 영역으로 바꿔 끼운다.
+    tab.muya = createMuya(
+      tab.muyaHost.firstElementChild as HTMLElement,
+      tab.path,
+      tab.source,
+      effective,
+      muyaAppHost,
+      (markdown) => {
+        tab.muyaSource = markdown;
+        if (markdown === tab.source) return;
+        tab.source = markdown;
+        markDirty(tab, true);
+        schedulePreview(tab);
+        // 붙여넣은 이미지처럼 늦게 끝나는 편집은 이미 분할로 넘어간 뒤 올 수 있다.
+        if (tab.mode !== "edit") syncEditor(tab);
+      },
+    );
+  } else if (tab.muyaSource !== tab.source) {
+    // 분할 모드나 다시 읽기로 바뀐 원문을 들인다.
+    tab.muyaSource = tab.source;
+    syncMuya(tab.muya, tab.source);
+  }
+  if (tab.mode === "edit" && tab.path === activePath) tab.muya.focus();
 }
 
 function setMode(tab: Tab, mode: Mode): void {
@@ -370,6 +494,17 @@ async function applyTheme(): Promise<void> {
   for (const tab of tabs) {
     if (tab.editor) applyEditorTheme(tab.editor, effective);
   }
+  // Muya는 색을 CSS 변수(styles.css)로 따라가고, 다이어그램 테마만 옵션으로 바꾼다.
+  if (tabs.some((t) => t.muya)) {
+    const { applyMuyaTheme } = await import("./muya");
+    // 다시 그리면 상대 경로 이미지가 window.DIRNAME 기준으로 풀린다 — 탭마다 자기 폴더로 맞춘다.
+    for (const tab of tabs) {
+      if (!tab.muya) continue;
+      window.DIRNAME = dirname(tab.path);
+      applyMuyaTheme(tab.muya, effective);
+    }
+    if (activePath) window.DIRNAME = dirname(activePath);
+  }
   const active = activePath ? findTab(activePath) : undefined;
   if (active) void paintMermaid(active);
 }
@@ -393,6 +528,7 @@ function closeTab(path: string): void {
   const [tab] = tabs.splice(index, 1);
   window.clearTimeout(tab.previewTimer);
   tab.editor?.destroy();
+  tab.muya?.destroy();
   tab.pane.remove();
   tab.button.remove();
   if (activePath !== path) return;
@@ -467,6 +603,12 @@ async function openPath(path: string): Promise<void> {
   const pane = document.createElement("div");
   pane.className = "pane";
 
+  const muyaHost = document.createElement("div");
+  muyaHost.className = "muya-host";
+  muyaHost.hidden = true;
+  muyaHost.appendChild(document.createElement("div"));
+  pane.appendChild(muyaHost);
+
   const editorHost = document.createElement("div");
   editorHost.className = "editor-host";
   editorHost.hidden = true;
@@ -495,6 +637,9 @@ async function openPath(path: string): Promise<void> {
     mode: "view",
     editorHost,
     editor: null,
+    muyaHost,
+    muya: null,
+    muyaSource: doc.text,
     source: doc.text,
     previewTimer: undefined,
     previewStale: false,
@@ -515,10 +660,30 @@ async function reloadActive(): Promise<void> {
   const tab = findTab(activePath);
   if (!tab) return;
 
+  // 다시 읽으면 Muya의 내용과 실행 취소 기록까지 바뀐다 — 미저장 편집이 있으면 먼저 묻는다.
+  tab.muya?.flush();
+  if (
+    tab.dirty &&
+    !(await confirmDialog({
+      message: `${basename(tab.path)}에 저장하지 않은 변경이 있습니다.\n다시 읽으면 사라집니다.`,
+      confirmLabel: "다시 읽기",
+    }))
+  ) {
+    return;
+  }
+
   const scroll = tab.preview.scrollTop;
   try {
     const doc = await invoke<Doc>("read_markdown", { path: tab.path });
     tab.source = doc.text;
+    tab.mtimeMs = doc.mtime_ms;
+    markDirty(tab, false);
+    // MarkText가 파일 변경을 다시 읽을 때처럼 내용을 통째로 바꾼다(실행 취소 기록도 비운다).
+    if (tab.muya) {
+      tab.muya.setContent(doc.text);
+      tab.muyaSource = doc.text;
+    }
+    syncEditor(tab);
     renderInto(tab.body, doc.text, doc.path);
     await paintMermaid(tab);
     tab.preview.scrollTop = scroll;
@@ -558,8 +723,16 @@ function installViewModeControl(): void {
   }
 }
 
+/** 분할 모드의 CM6. 편집 전용 모드에서는 CM이 숨어 있으므로 없는 것으로 본다. */
 function activeEditor(): EditorView | null {
-  return (activePath ? findTab(activePath)?.editor : null) ?? null;
+  const tab = activePath ? findTab(activePath) : undefined;
+  return tab && tab.mode !== "edit" ? tab.editor : null;
+}
+
+function focusActiveEditor(): void {
+  const tab = activePath ? findTab(activePath) : undefined;
+  if (tab?.mode === "edit") tab.muya?.focus();
+  else activeEditor()?.focus();
 }
 
 function closePopover(): void {
@@ -570,13 +743,22 @@ function closePopover(): void {
     ?.setAttribute("aria-expanded", "false");
   openPop = null;
   // 팝오버가 닫히면 커서를 편집기로 돌려준다 — 안 그러면 다음 타이핑이 사라진다.
-  activeEditor()?.focus();
+  focusActiveEditor();
+}
+
+/** 캐럿이 있는 Muya 블록의 제목 레벨(0 = 제목 아님). */
+function muyaHeadingLevelOf(muya: MuyaEditor): number {
+  const node = getSelection()?.anchorNode ?? null;
+  const element = node instanceof Element ? node : node?.parentElement;
+  const heading = element?.closest("h1, h2, h3, h4, h5, h6");
+  return heading && muya.domNode.contains(heading) ? Number(heading.tagName[1]) : 0;
 }
 
 /** 헤딩 팝오버는 열릴 때 커서가 있는 줄의 레벨을 선택 상태로 보여준다. */
 function syncHeadingItems(pop: HTMLElement): void {
+  const tab = activePath ? findTab(activePath) : undefined;
   const editor = activeEditor();
-  const level = editor ? activeHeading(editor.state) : 0;
+  const level = tab?.mode === "edit" ? (tab.muya ? muyaHeadingLevelOf(tab.muya) : 0) : editor ? activeHeading(editor.state) : 0;
   for (const item of pop.querySelectorAll<HTMLElement>("[data-format]")) {
     const value = Number(item.dataset.format!.slice(1));
     item.setAttribute("aria-checked", String(value === level));
@@ -639,7 +821,15 @@ function installFormatControl(): void {
     // 눌러도 편집기가 포커스를 잃지 않아야 선택 영역이 살아 있다.
     button.addEventListener("mousedown", (event) => event.preventDefault());
     button.addEventListener("click", () => {
-      const editor = activePath ? findTab(activePath)?.editor : undefined;
+      const tab = activePath ? findTab(activePath) : undefined;
+      if (tab?.mode === "edit") {
+        // 편집 전용 모드는 Muya에 MarkText 메뉴와 같은 엔진 호출로 적용한다.
+        const muya = tab.muya;
+        closePopover();
+        if (muya) void import("./muya").then(({ applyToolbarFormat }) => applyToolbarFormat(muya, id));
+        return;
+      }
+      const editor = activeEditor();
       if (!editor) return;
       editor.dispatch(applyFormat(editor.state, id));
       closePopover();
@@ -694,7 +884,8 @@ function installLinkHandler(): void {
 
     const href = anchor.getAttribute("href");
     event.preventDefault();
-    if (!href) return;
+    // 편집 중인 Muya의 링크는 클릭이 커서 놓기다 — 여는 것은 ⌘-클릭(muya.ts의 format-click)뿐이다.
+    if (!href || anchor.closest(".muya-host")) return;
 
     if (href.startsWith("#")) {
       // 탭이 여러 개면 감춰진 탭에도 같은 id가 있을 수 있으므로 활성 페인 안에서만 찾는다.
@@ -709,15 +900,19 @@ function installLinkHandler(): void {
       return;
     }
 
-    if (isExternalHref(href)) {
-      void openUrl(href);
-      return;
-    }
-
-    if (activePath) {
-      void openPath(resolvePath(dirname(activePath), safeDecode(href)));
-    }
+    openHref(href);
   });
+}
+
+/** 문서 밖으로 나가는 링크 — 외부는 기본 브라우저, 상대 경로는 새 탭. Muya의 링크 도구도 같은 길을 탄다. */
+function openHref(href: string): void {
+  if (isExternalHref(href)) {
+    void openUrl(href);
+    return;
+  }
+  if (activePath) {
+    void openPath(resolvePath(dirname(activePath), safeDecode(href)));
+  }
 }
 
 function findById(scope: ParentNode, candidates: string[]): HTMLElement | null {
@@ -754,11 +949,18 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   installLinkHandler();
   installCopyHandler();
+  // vendor/muya 패치 — Muya의 로컬 이미지도 프리뷰와 같은 asset protocol로 연다(ADR 260823-002608).
+  window.MUYA_LOCAL_IMAGE_URL = (path) => convertFileSrc(safeDecode(path));
+  // 하네스가 탭 상태(Muya 인스턴스)를 읽는다. 개발 서버에서만 — 배포 빌드에는 없다.
+  if (import.meta.env.DEV) Object.assign(window, { __MARKVIEW_TABS__: tabs });
 
+  // 캡처 단계에서 받는다 — 편집기(Muya·CM)보다 먼저 봐야 ⌘E 같은 앱 단축키를 엔진이 가로채지 못한다.
   window.addEventListener("keydown", (event) => {
     // 모달이 떠 있으면 전역 단축키를 통째로 막는다 — confirmDialog은 Esc/Enter 외의 키를
     // 통과시키므로, 막지 않으면 모드 전환의 editor.focus()가 모달의 포커스를 훔친다.
     if (document.querySelector(".modal-backdrop")) return;
+    // IME 조합 중인 음절은 조합이 끝나기 전까지 Muya 원문에 없다 — 이때 모드를 바꾸면 사라진다.
+    if (event.isComposing) return;
     // 수정자 없는 F1~F3은 보기 모드로 직행한다. macOS 내장 키보드에서는 시스템이
     // 밝기·Mission Control로 먼저 먹으므로 fn을 함께 눌러야 한다 — 코드로는 못 고친다.
     const fkeyMode = fkeyModes[event.key];
@@ -770,24 +972,39 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
     if (!(event.metaKey || event.ctrlKey)) return;
     const key = event.key.toLowerCase();
-    if (key === "r") {
+    // Shift 없는 ⌘R만 다시 읽기다 — ⇧⌘R은 편집 모드에서 MarkText의 서식 지우기다.
+    if (key === "r" && !event.shiftKey) {
       event.preventDefault();
       void reloadActive();
       return;
     }
     // ⌘E는 기본 메뉴에 없으므로 여기서 잡힌다 (⌘W와 달리 메뉴 재조립이 불필요).
     // 가장 흔한 왕복인 분할 ↔ 보기 전용을 토글한다 — 편집 전용은 툴바로만 간다.
-    if (key === "e") {
+    if (key === "e" && !event.shiftKey) {
       event.preventDefault();
+      // Muya 엔진도 ⌘E를 인라인 코드로 쓴다 — 이 앱에서 ⌘E는 모드 전환이므로 엔진까지 내려보내지 않는다.
+      event.stopPropagation();
       const tab = activePath ? findTab(activePath) : undefined;
       if (tab) setMode(tab, tab.mode === "view" ? "split" : "view");
     }
-  });
+  }, true);
 
   await getCurrentWebview().onDragDropEvent(async (event) => {
     if (event.payload.type !== "drop") return;
-    for (const path of event.payload.paths) {
-      await openPath(path);
+    const { paths, position } = event.payload;
+    // 편집 전용 모드의 Muya 위에 놓은 이미지는 MarkText처럼 문서에 넣는다(문서 옆 assets/로 복사).
+    // 나머지(.md 등)는 지금처럼 탭으로 연다.
+    const muya = imageDropTarget(position);
+    const images = muya ? paths.filter((p) => IMAGE_PATH.test(p)) : [];
+    for (const path of images) {
+      try {
+        await muya!.pasteImage(path);
+      } catch (e) {
+        notify(`이미지를 넣지 못했습니다: ${e}`);
+      }
+    }
+    for (const path of paths) {
+      if (!images.includes(path)) await openPath(path);
     }
   });
 
@@ -808,6 +1025,16 @@ window.addEventListener("DOMContentLoaded", async () => {
   // ⌘S는 메뉴 가속기다 — macOS는 메뉴 키 등가물을 webview보다 먼저 처리하므로
   // keydown으로 잡으려 해도 오지 않는다(⌘W와 같은 이유).
   await listen("save", () => void saveActive());
+  // ⇧⌘V(메뉴) — Rust가 읽은 클립보드 글자. 편집 전용은 MarkText의 일반 텍스트 붙여넣기, 분할은 CM에 그대로 넣는다.
+  await listen<string>("paste-as-plaintext", (event) => {
+    const tab = activePath ? findTab(activePath) : undefined;
+    if (tab?.mode === "edit" && tab.muya) {
+      const muya = tab.muya;
+      void import("./muya").then(({ pastePlainText }) => pastePlainText(muya, event.payload));
+    } else if (tab?.mode === "split" && tab.editor) {
+      tab.editor.dispatch(tab.editor.state.replaceSelection(event.payload));
+    }
+  });
   await listen("close-window", () => void requestCloseWindow());
 
   // Rust가 창 닫기를 막고 넘긴 요청 — 미저장 문서가 있으면 확인을 받는다.
@@ -816,6 +1043,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
 /** 창을 닫아도 되는지 확인한 뒤 닫는다. 미저장 탭이 여러 개면 한 번만 묻는다. */
 async function requestCloseWindow(): Promise<void> {
+  for (const tab of tabs) tab.muya?.flush();
   const dirty = tabs.filter((t) => t.dirty);
   if (dirty.length > 0) {
     const names = dirty.map((t) => basename(t.path)).join(", ");

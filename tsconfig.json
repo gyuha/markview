@@ -2,6 +2,8 @@
   "compilerOptions": {
     "target": "ES2020",
     "useDefineForClassFields": true,
+    /* vendor/muya(MarkText Muya)가 레거시 클래스 데코레이터를 쓴다 — 업스트림 tsconfig와 같게 */
+    "experimentalDecorators": true,
     "module": "ESNext",
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
@@ -19,5 +21,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src", "vendor/muya/src/types"]
 }

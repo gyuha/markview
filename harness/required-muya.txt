@@ -1,0 +1,48 @@
+M01  편집 모드(연필 버튼과 F1 둘 다)로 들어가면 Muya 편집기가 보이고(computed display) CodeMirror(.editor-host)는 보이지 않는다
+M02  분할(F2)은 CodeMirror+프리뷰, 보기(F3)는 프리뷰만 보이며 Muya는 두 모드에서 보이지 않는다
+M03  Muya에 등록된 UI 플러그인 이름 목록이 MarkText 데스크톱 editor.vue의 17개(TableChessboard ParagraphQuickInsertMenu CodeBlockLanguageSelector EmojiSelector ImagePathPicker ImageEditTool ImageResizeBar ImageToolBar InlineFormatToolbar ParagraphFrontButton ParagraphFrontMenu PreviewToolBar LinkTools FootnoteTool TableColumnToolbar TableDragBar TableRowColumMenu)와 집합으로 같다
+M04  Muya 인스턴스 옵션이 MarkText 기본 설정(static/preference.json)과 같다: bulletListMarker '-' · orderListDelimiter '.' · preferLooseListItem true · autoPairBracket true · autoPairMarkdownSyntax true · autoPairQuote true · tabSize 4 · listIndentation 1 · frontmatterType '-' · trimUnnecessaryCodeBlockEmptyLines true · footnote false · superSubScript false · disableHtml false · texMathDollars true · hideQuickInsertHint false · hideLinkPopup false · autoCheck false · codeBlockLineNumbers false · wrapCodeBlocks false
+R01  제목(h1·h2) · 굵게(strong) · 기울임(em) · 취소선(del) · 인라인 코드(code) · 링크(a)가 Muya 안에서 각각 그 요소로 렌더된다
+R02  글머리 리스트(ul) · 번호 리스트(ol) · 체크박스 리스트(input[type=checkbox]) · 인용(blockquote) · 구분선(hr) · 표(table, 헤더 셀 2개 이상)가 렌더된다
+R03  ```js 코드블록이 Prism 토큰(.token 요소 1개 이상)으로 하이라이트된다
+R04  $…$ 인라인 수식과 $$ 수식 블록이 KaTeX(.katex)로, ```mermaid 블록이 svg로 렌더된다
+R05  문서 맨 앞 --- front matter가 front matter 블록으로 렌더되고 본문 문단으로 새지 않는다
+R06  상대 경로 이미지 ![](img/a.png)의 img src가 문서 폴더 기준으로 풀린 절대 경로를 convertFileSrc에 넣은 값과 같다(file:// 로 시작하지 않는다)
+S01  편집 없이 보기→편집→분할→편집→보기를 오가면 CodeMirror 문서가 원문과 바이트 단위로 같고, 탭이 수정됨 표시를 얻지 않으며, write_markdown 호출이 0번이다
+S02  Muya에 DOM 입력(execCommand insertText)으로 글자를 넣으면 탭이 수정됨 표시를 얻고, 분할로 바꾸면 CodeMirror 문서에 그 글자가 들어 있다
+S03  분할(CodeMirror)에서 고친 내용이 편집 모드로 돌아오면 Muya에 보인다
+S04  편집 모드에서 Muya 입력 후 저장(⌘S 경로)하면 write_markdown에 넘어간 본문이 그 시점 Muya getMarkdown() 결과와 같다
+S05  탭 2개(?files=2)에서 각각 다른 글자를 입력해도 서로 섞이지 않고, 탭을 오간 뒤에도 각자 내용이 유지된다
+S06  Muya에서 수정한 탭을 닫으려 하면 미저장 확인 대화상자가 뜬다
+I01  빈 문단에 "# " 입력 → 그 블록이 h1이 된다 (DOM 입력 이벤트로만 — 엔진 API 직접 호출 금지, 이하 I·U·K·F 동일)
+I02  "- " → ul, "1. " → ol, "- [ ] " → 체크박스 리스트로 바뀐다
+I03  "> " → blockquote로 바뀐다
+I04  "```" 입력 후 Enter → 코드블록이 생긴다
+I05  "| a | b |" 입력 후 Enter → 열 2개짜리 표가 생긴다
+I06  "(" 입력 → "()"로 짝이 채워지고, "**" 입력 → "****" 짝이 채워진다 (MarkText autoPair 기본값)
+I07  ⌘Z가 직전 입력을 되돌리고 ⇧⌘Z가 다시 적용한다 (getMarkdown 전후 비교)
+U01  텍스트를 선택하면 인라인 서식 툴바가 보이고, 그 툴바의 굵게 버튼을 누르면 선택이 **…**가 된다
+U02  빈 문단에 "/" 입력 → 빠른 삽입 메뉴가 보이고, 항목(예: 표 또는 코드블록)을 고르면 그 블록이 삽입된다
+U03  문단 왼쪽 핸들 버튼이 보이고, 누르면 문단 메뉴가 열리며 메뉴의 "복제"가 문단을 복제한다
+U04  코드블록에서 언어 선택기가 열리고 언어를 고르면 펜스 언어가 바뀐다(getMarkdown의 ```언어)
+U05  ":smi" 입력 → 이모지 선택기가 보이고, 고르면 이모지가 들어간다
+U06  표 셀에 포커스 → 열 툴바가 보이고, 행/열 메뉴의 "행 추가"가 행을 늘리며, 드래그 바가 존재하고, 표 크기 선택(TableChessboard)이 열린다
+U07  이미지를 클릭 → 이미지 툴바가 보이고, 크기 조절 바가 존재하며, 이미지 편집 도구(경로 선택 ImagePathPicker 포함)가 열린다
+U08  링크 위에 올리면 링크 도구가 보인다
+U09  수식 블록 또는 mermaid 블록에 미리보기 툴바가 보인다
+T01  편집 모드에서 상단 툴바 14개 버튼(bold italic strike h1 h2 h3 h0 list ordered code codeblock quote link image)이 모두 활성이고, 각 버튼이 Muya 문서에 그 서식/블록을 적용한다 (버튼마다 기대 마크다운과 대조)
+K01  편집 모드 키맵 표가 MarkText keybindingsDarwin.ts(고정 커밋)의 format.* 중 키가 있는 10개 · paragraph.* 20개 · edit.{undo redo select-all copy-as-rich paste-as-plaintext duplicate create-paragraph delete-paragraph find find-next find-previous replace} 12개, 합계 42개와 키·동작 id가 일치한다
+K02  위 42개를 각각 Muya 안에서 keydown으로 보내면 기대 효과가 난다 (format·paragraph 30개는 getMarkdown 변화로, edit 12개는 해당 동작으로 판정)
+K03  편집 모드에서 ⇧⌘R은 서식 지우기(clear-format)이고 새로고침을 하지 않으며, Shift 없는 ⌘R은 기존대로 새로고침한다
+K04  Muya에 포커스가 있어도 F1/F2/F3 · ⌘E · ⌘S(저장 이벤트) · ⌘W(탭 닫기 이벤트)가 기존대로 동작한다
+F01  편집 모드에서 ⌘F → MarkText 검색창이 열리고 검색 입력에 포커스가 간다
+F02  검색어 입력 → 표시된 일치 개수가 픽스처의 실제 개수와 같고 일치 부분이 하이라이트된다
+F03  Enter·⌘G는 다음, ⇧Enter·⇧⌘G는 이전 일치로 이동하며 현재 위치 표시(i/N)가 바뀐다
+F04  대소문자 구분 · 단어 단위 · 정규식 토글이 각각 일치 개수를 기대대로 바꾼다
+F05  ⌥⌘F → 바꾸기 입력이 열리고, 하나 바꾸기와 모두 바꾸기가 getMarkdown에 반영된다
+F06  Esc → 검색창이 닫히고 하이라이트가 사라진다
+P01  편집 모드에서 이미지 데이터(image/png File)를 붙여넣으면 <문서 폴더>/assets/<파일명>에 그 바이트를 쓰는 IPC가 호출되고, 문서에 ![…](assets/<파일명>)이 삽입된다
+P02  편집 모드 편집기 위에 이미지 파일 경로를 드롭(Tauri drag-drop 이벤트)하면 <문서 폴더>/assets/로 복사하는 IPC가 호출되고 상대 경로로 삽입된다
+P03  .md 파일을 드롭하면 편집 모드에서도 기존처럼 새 탭으로 열린다 (이미지로 삽입되지 않는다)
+P04  붙여넣기·드롭으로 삽입된 이미지가 Muya 안에서 convertFileSrc 값으로 표시된다
+D01  라이트/다크 전환 시 Muya 영역의 배경·글자색 computed 값이 앱 팔레트(라이트 #ffffff/#1f2328, 다크 #0d1117/#e6edf3)를 따르고, Muya mermaidTheme 옵션이 다크에서 'dark', 라이트에서 'default'다

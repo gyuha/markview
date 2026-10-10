@@ -1,0 +1,4 @@
+marktext/marktext@34ea9931a34ded1f3d462f0821a12e6eb64cd180
+source: https://github.com/marktext/marktext/tree/34ea9931a34ded1f3d462f0821a12e6eb64cd180/packages/muya/src
+copied: packages/muya/src (excluding __tests__ directories)
+license: MIT (repository root LICENSE)

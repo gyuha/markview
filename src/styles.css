@@ -40,12 +40,25 @@ body {
   color: var(--fg);
 }
 
-body {
+/*
+ * html body로 한 단계 높인다 — 편집 엔진 Muya가 html·body에 자기 글꼴·줄 높이·글꼴 다듬기를 전역으로
+ * 걸고 편집 모드 첫 진입 때 늦게 주입되므로, 같은 명시도면 그쪽이 이겨 뷰어 전체가 바뀐다.
+ */
+html body {
   display: flex;
   flex-direction: column;
   font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
   font-size: 16px;
   line-height: 1.65;
+  -webkit-font-smoothing: auto;
+}
+
+/* Muya의 전역 ::selection 색이 편집기 밖까지 번지지 않게 시스템 기본으로 되돌린다. */
+html #chrome ::selection,
+html .preview ::selection,
+html .editor-host ::selection {
+  color: HighlightText;
+  background: Highlight;
 }
 
 #chrome {
@@ -346,6 +359,297 @@ body {
   display: none;
 }
 
+/* 편집 전용 모드의 Muya(MarkText 엔진). 안쪽 .mu-editor가 편집 영역이자 스크롤 컨테이너다. */
+.muya-host {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.muya-host[hidden] {
+  display: none;
+}
+
+/* 편집 전용 모드의 찾기/바꾸기 — MarkText components/search/index.vue의 스타일. 색은 Muya 변수(앱 팔레트). */
+.muya-host {
+  position: relative;
+}
+
+.search-bar {
+  position: absolute;
+  top: 0;
+  right: 20px;
+  z-index: 5;
+  display: flex;
+  flex-direction: row;
+  width: 400px;
+  padding: 0;
+  background: var(--float-bg-color);
+  border-radius: 3px;
+  box-shadow: var(--float-shadow);
+}
+
+.search-bar[hidden],
+.search-bar .replace[hidden],
+.search-bar .error-msg[hidden] {
+  display: none;
+}
+
+.search-bar .left-arrow {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  color: var(--icon-color);
+  cursor: pointer;
+}
+
+.search-bar .left-arrow:hover {
+  background: var(--float-hover-color);
+}
+
+.search-bar .left-arrow svg {
+  width: 12px;
+  height: 12px;
+}
+
+.search-bar .left-arrow.arrow-right svg {
+  transform: rotate(-90deg);
+}
+
+.search-bar .right-controls {
+  flex: 1;
+}
+
+.search-bar .search,
+.search-bar .replace {
+  display: flex;
+  height: 28px;
+  padding: 4px 10px 0 4px;
+  margin-bottom: 5px;
+}
+
+.search-bar .button {
+  box-sizing: border-box;
+  display: inline-block;
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  font-weight: 500;
+  color: var(--icon-color);
+  text-align: center;
+  cursor: pointer;
+  background: none;
+  border: none;
+  outline: none;
+}
+
+.search-bar .button.right {
+  margin-left: 10px;
+}
+
+.search-bar .button > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.search-bar .button:active {
+  opacity: 0.5;
+}
+
+.search-bar .input-wrapper {
+  position: relative;
+  display: flex;
+  flex: 1;
+  overflow: visible;
+  background: var(--input-bg-color);
+  border: 1px solid var(--input-bg-color);
+  border-radius: 3px;
+}
+
+.search-bar .input-wrapper.error {
+  border: 1px solid var(--error-fg);
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.search-bar .input-wrapper .controls {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  display: flex;
+  font-size: 12px;
+  color: var(--editor-color-50);
+}
+
+.search-bar .controls > span.search-result {
+  height: 20px;
+  margin-right: 5px;
+  line-height: 17px;
+}
+
+.search-bar .controls > span:not(.search-result) {
+  width: 20px;
+  height: 20px;
+  margin-right: 2px;
+  margin-left: 2px;
+  cursor: pointer;
+}
+
+.search-bar .controls > span > svg {
+  width: 20px;
+  height: 20px;
+  fill: var(--icon-color);
+}
+
+.search-bar .controls > span > svg:hover,
+.search-bar .controls > span.active > svg {
+  fill: var(--theme-color);
+}
+
+.search-bar .error-msg {
+  position: absolute;
+  top: 27px;
+  left: -1px;
+  z-index: 1;
+  box-sizing: border-box;
+  width: calc(100% + 2px);
+  height: 28px;
+  padding: 0 8px;
+  font-size: 14px;
+  line-height: 28px;
+  color: #ffffff;
+  background: var(--error-fg);
+  border-bottom-right-radius: 3px;
+  border-bottom-left-radius: 3px;
+}
+
+.search-bar .input-wrapper input {
+  box-sizing: border-box;
+  flex: 1;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 14px;
+  color: var(--editor-color);
+  background: transparent;
+  border: none;
+  outline: none;
+}
+
+.muya-host .mu-editor {
+  height: 100%;
+  overflow-y: auto;
+  background: var(--editor-bg-color);
+}
+
+/*
+ * Muya의 색 변수를 앱 팔레트로 덮는다(MarkText 테마는 들이지 않는다 — ADR 261010-202536).
+ * Muya 스타일은 편집 모드 진입 때 늦게 주입되고 같은 :root라 순서로 이기므로 html[data-theme]로
+ * 한 단계 높인다. 플로팅 도구는 document.body에 붙으므로 페인이 아니라 문서 전역에 건다.
+ */
+html[data-theme="light"] {
+  --editor-color: #1f2328;
+  --editor-color-80: #1f2328;
+  --editor-color-50: #59636e;
+  --editor-color-30: #afb8c1;
+  --editor-color-10: #d1d9e0;
+  --editor-color-04: #f6f8fa;
+  --editor-bg-color: #ffffff;
+  --theme-color: #0969da;
+  --highlight-color: rgb(212 167 44 / 40%);
+  --selection-color: rgb(9 105 218 / 20%);
+  --link-color: #0969da;
+  --icon-color: #59636e;
+  --code-block-bg-color: #f6f8fa;
+  --table-border-color: #d1d9e0;
+  --float-bg-color: #ffffff;
+  --float-border-color: #d1d9e0;
+  --button-border: 1px solid #d1d9e0;
+}
+
+html[data-theme="dark"] {
+  --editor-color: #e6edf3;
+  --editor-color-80: #f0f6fc;
+  --editor-color-50: #9198a1;
+  --editor-color-30: #656c76;
+  --editor-color-10: #3d444d;
+  --editor-color-04: #151b23;
+  --editor-bg-color: #0d1117;
+  --theme-color: #4493f8;
+  --highlight-color: rgb(187 128 9 / 40%);
+  --selection-color: rgb(56 139 253 / 30%);
+  --link-color: #4493f8;
+  --delete-color: #ff7b72;
+  --icon-color: #9198a1;
+  --code-block-bg-color: #151b23;
+  --table-border-color: #3d444d;
+  --input-bg-color: rgb(255 255 255 / 8%);
+  --button-bg-color: #212830;
+  --button-bg-color-hover: #262c36;
+  --button-border: 1px solid #3d444d;
+  --float-bg-color: #151b23;
+  --float-hover-color: rgb(255 255 255 / 6%);
+  --float-border-color: #3d444d;
+  --float-shadow: rgb(1 4 9 / 60%) 0 0 0 1px, rgb(1 4 9 / 50%) 0 8px 24px;
+}
+
+/* Muya에는 Prism 라이트 테마만 있다 — 다크에서는 프리뷰(github-dark)와 같은 계열로 덮는다. */
+html[data-theme="dark"] .mu-editor .token.comment,
+html[data-theme="dark"] .mu-editor .token.prolog,
+html[data-theme="dark"] .mu-editor .token.doctype,
+html[data-theme="dark"] .mu-editor .token.cdata,
+html[data-theme="dark"] .mu-editor .token.punctuation {
+  color: #9198a1;
+}
+
+html[data-theme="dark"] .mu-editor .token.property,
+html[data-theme="dark"] .mu-editor .token.tag,
+html[data-theme="dark"] .mu-editor .token.boolean,
+html[data-theme="dark"] .mu-editor .token.number,
+html[data-theme="dark"] .mu-editor .token.constant,
+html[data-theme="dark"] .mu-editor .token.symbol,
+html[data-theme="dark"] .mu-editor .token.operator,
+html[data-theme="dark"] .mu-editor .token.entity,
+html[data-theme="dark"] .mu-editor .token.url {
+  color: #79c0ff;
+}
+
+html[data-theme="dark"] .mu-editor .token.selector,
+html[data-theme="dark"] .mu-editor .token.attr-name,
+html[data-theme="dark"] .mu-editor .token.string,
+html[data-theme="dark"] .mu-editor .token.char,
+html[data-theme="dark"] .mu-editor .token.builtin {
+  color: #a5d6ff;
+}
+
+html[data-theme="dark"] .mu-editor .token.atrule,
+html[data-theme="dark"] .mu-editor .token.attr-value,
+html[data-theme="dark"] .mu-editor .token.keyword {
+  color: #ff7b72;
+}
+
+html[data-theme="dark"] .mu-editor .token.function,
+html[data-theme="dark"] .mu-editor .token.class-name {
+  color: #d2a8ff;
+}
+
+html[data-theme="dark"] .mu-editor .token.regex,
+html[data-theme="dark"] .mu-editor .token.important,
+html[data-theme="dark"] .mu-editor .token.variable {
+  color: #ffa657;
+}
+
+html[data-theme="dark"] .mu-editor .token.inserted {
+  color: #aff5b4;
+  background: #033a16;
+}
+
+html[data-theme="dark"] .mu-editor .token.deleted {
+  color: #ffdcd7;
+  background: #67060c;
+}
+
 /* CodeMirror가 페인 높이를 채우게 한다. */
 .editor-host .cm-editor {
   height: 100%;
@@ -538,6 +842,7 @@ body {
 
 /* 스크롤바 — macOS 기본은 15px 남짓으로 두껍다. WKWebView 전용 의사요소로 얇게 만든다. */
 .preview::-webkit-scrollbar,
+.muya-host .mu-editor::-webkit-scrollbar,
 .editor-host .cm-scroller::-webkit-scrollbar,
 #tabbar::-webkit-scrollbar,
 .markdown-body pre::-webkit-scrollbar,
@@ -547,6 +852,7 @@ body {
 }
 
 .preview::-webkit-scrollbar-track,
+.muya-host .mu-editor::-webkit-scrollbar-track,
 .editor-host .cm-scroller::-webkit-scrollbar-track,
 #tabbar::-webkit-scrollbar-track,
 .markdown-body pre::-webkit-scrollbar-track,
@@ -555,6 +861,7 @@ body {
 }
 
 .preview::-webkit-scrollbar-thumb,
+.muya-host .mu-editor::-webkit-scrollbar-thumb,
 .editor-host .cm-scroller::-webkit-scrollbar-thumb,
 #tabbar::-webkit-scrollbar-thumb,
 .markdown-body pre::-webkit-scrollbar-thumb,
@@ -564,6 +871,7 @@ body {
 }
 
 .preview::-webkit-scrollbar-thumb:hover,
+.muya-host .mu-editor::-webkit-scrollbar-thumb:hover,
 #tabbar::-webkit-scrollbar-thumb:hover,
 .markdown-body pre::-webkit-scrollbar-thumb:hover,
 .markdown-body table::-webkit-scrollbar-thumb:hover {
@@ -635,6 +943,26 @@ body {
   font-size: 0.92rem;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+/* 표 삽입 대화상자의 행·열 입력. */
+.modal-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 0.6rem;
+  font-size: 0.85rem;
+}
+
+.modal-field input {
+  width: 5rem;
+  padding: 0.25rem 0.4rem;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
 
 .modal-actions {

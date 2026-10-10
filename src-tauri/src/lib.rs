@@ -1,3 +1,5 @@
+mod assets;
+
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -176,6 +178,70 @@ fn write_markdown(
     save_document(&set, &p, &text, expected_mtime_ms, force)
 }
 
+/// 사용자가 이 세션에서 창에 드롭한 파일 경로. 이미지 복사(copy_asset)는 이 목록에 있는 경로만 받는다 —
+/// 드롭 경로는 OS가 준 것이라 스크립트가 지어낼 수 없다.
+#[derive(Default)]
+struct DroppedPaths(Mutex<HashSet<PathBuf>>);
+
+/// 편집 모드에서 붙여넣은 이미지(base64)를 문서 옆 assets/에 저장하고 상대 경로를 돌려준다.
+/// 디스크 쓰기라 메인 스레드를 막지 않도록 async로 돈다.
+#[tauri::command(async)]
+fn save_asset(
+    opened: tauri::State<OpenedPaths>,
+    doc_path: String,
+    ext: String,
+    data: String,
+) -> Result<String, String> {
+    let set = opened.0.lock().unwrap();
+    assets::save_asset(&set, &PathBuf::from(doc_path), &ext, &data)
+}
+
+/// 드롭한 이미지 파일을 문서 옆 assets/로 복사하고 상대 경로를 돌려준다.
+#[tauri::command(async)]
+fn copy_asset(
+    opened: tauri::State<OpenedPaths>,
+    dropped: tauri::State<DroppedPaths>,
+    doc_path: String,
+    src: String,
+) -> Result<String, String> {
+    let dropped = dropped.0.lock().unwrap().clone();
+    let set = opened.0.lock().unwrap();
+    assets::copy_asset(&set, &dropped, &PathBuf::from(doc_path), &PathBuf::from(src))
+}
+
+/// 이미지 편집 도구의 "경로 선택"(MarkText ImagePathPicker). Rust가 파일 대화상자를 띄우고, 고른 파일을
+/// 바로 assets/로 복사해 상대 경로를 돌려준다(취소면 None). 대화상자를 스크립트에 열어 주지 않는다 —
+/// JS 대화상자 API는 고른 폴더를 asset scope에 재귀로 열어 버린다.
+#[tauri::command(async)]
+fn pick_image(app: AppHandle, opened: tauri::State<OpenedPaths>, doc_path: String) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let doc = PathBuf::from(doc_path);
+    if !opened.0.lock().unwrap().contains(&doc) {
+        return Err("이 세션에서 열지 않은 문서에는 이미지를 저장할 수 없습니다.".into());
+    }
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("이미지", &assets::IMAGE_EXT)
+        .blocking_pick_file();
+    let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
+        return Ok(None);
+    };
+    let set = opened.0.lock().unwrap();
+    assets::store_file(&set, &doc, &path).map(Some)
+}
+
+/// 이미지 경로 입력의 자동 완성(문서 폴더 기준).
+#[tauri::command]
+fn list_image_paths(
+    opened: tauri::State<OpenedPaths>,
+    doc_path: String,
+    partial: String,
+) -> Vec<assets::PathSuggestion> {
+    let set = opened.0.lock().unwrap();
+    assets::list_image_paths(&set, &PathBuf::from(doc_path), &partial)
+}
+
 /// 메뉴를 직접 조립한다.
 /// predefined `close_window`의 가속기는 ⌘W로 고정이고 macOS는 메뉴 키 등가물을
 /// responder chain보다 먼저 처리하므로, 그 항목을 두는 한 webview는 ⌘W를 볼 수 없다.
@@ -226,6 +292,15 @@ fn build_menu(handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &PredefinedMenuItem::cut(handle, None)?,
             &PredefinedMenuItem::copy(handle, None)?,
             &PredefinedMenuItem::paste(handle, None)?,
+            // MarkText처럼 메뉴 가속기로 둔다 — 클립보드는 사용자가 이 키를 누를 때만 Rust가 읽어 넘긴다
+            // (스크립트에 클립보드 읽기 권한을 주지 않는다).
+            &MenuItem::with_id(
+                handle,
+                "paste-as-plaintext",
+                "Paste as Plain Text",
+                true,
+                Some("Shift+CmdOrCtrl+V"),
+            )?,
             &PredefinedMenuItem::select_all(handle, None)?,
         ],
     )?;
@@ -268,6 +343,8 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        // 편집 모드 이미지 도구의 "경로 선택"(MarkText ImagePathPicker)이 여는 파일 대화상자.
+        .plugin(tauri_plugin_dialog::init())
         .menu(|handle| build_menu(handle))
         .on_menu_event(|handle, event| {
             // 메뉴는 창 개수를 알지만 탭 개수는 모른다 — 탭 판단은 프론트엔드에 맡긴다.
@@ -281,14 +358,25 @@ pub fn run() {
                 "close-window" => {
                     let _ = handle.emit("close-window", ());
                 }
+                "paste-as-plaintext" => {
+                    use tauri_plugin_clipboard_manager::ClipboardExt;
+                    if let Ok(text) = handle.clipboard().read_text() {
+                        let _ = handle.emit("paste-as-plaintext", text);
+                    }
+                }
                 _ => {}
             }
         })
         .manage(PendingFiles::default())
         .manage(OpenedPaths::default())
+        .manage(DroppedPaths::default())
         .manage(CloseGuard::default())
         // 창 닫기 요청을 막고 프론트엔드에 넘긴다 — 미저장 문서 확인은 탭 상태를 아는 쪽이 해야 한다.
         .on_window_event(|window, event| {
+            // 실제로 드롭된 경로를 기록한다 — 편집 모드의 이미지 복사는 이 경로만 받는다.
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                window.state::<DroppedPaths>().0.lock().unwrap().extend(paths.iter().cloned());
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // 통과 플래그가 서 있으면 내리고 그대로 닫히게 둔다.
                 if window.state::<CloseGuard>().0.swap(false, Ordering::SeqCst) {
@@ -302,7 +390,11 @@ pub fn run() {
             read_markdown,
             write_markdown,
             take_pending_files,
-            allow_close
+            allow_close,
+            save_asset,
+            copy_asset,
+            pick_image,
+            list_image_paths
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

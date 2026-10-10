@@ -1,0 +1,166 @@
+=== chromium toolbar.html
+탭수=1
+초기(보기): 에디터=없음 프리뷰=있음 선택=["view"] 비활성=14/14
+편집: 에디터=없음 프리뷰=없음 선택=["edit"] 비활성=0/14
+분할: 에디터=있음 프리뷰=있음 선택=["split"] 비활성=0/14
+보기: 에디터=없음 프리뷰=있음 선택=["view"] 비활성=14/14
+버튼 굵게 → "**제목**\n\n본문 한 줄\n"
+F1(편집): 에디터=없음 프리뷰=없음 선택=["edit"] 비활성=0/14
+F2(분할): 에디터=있음 프리뷰=있음 선택=["split"] 비활성=0/14
+F3(보기): 에디터=없음 프리뷰=있음 선택=["view"] 비활성=14/14
+모달 중 F1(무효여야 함): 에디터=없음 프리뷰=있음 선택=["view"] 비활성=14/14
+=== chromium tabs.html?files=2
+PASS  탭 2개가 열렸다
+페인 상태: [{"hidden":true,"display":"none"},{"hidden":false,"display":"flex"}]
+PASS  보이는 페인은 정확히 1개
+PASS  감춰진 페인의 computed display
+전환 후: [{"hidden":false,"display":"flex"},{"hidden":true,"display":"none"}]
+PASS  전환 후에도 보이는 페인 1개
+
+전부 통과
+=== chromium scroll.html
+앵커 61개 (태그: h2,p,pre)
+PASS  h2 앵커 개수
+PASS  h2 앵커의 줄 번호가 원문과 일치
+PASS  코드블록(pre)에도 앵커가 있다
+PASS  프리뷰가 스크롤 가능한 높이
+PASS  에디터→프리뷰: 프리뷰 최상단 줄  got=102.0 want=103.0±3
+PASS  에디터→프리뷰: 에디터가 되밀리지 않음  got=102.0 want=103.0±3
+PASS  프리뷰→에디터: 에디터 최상단 줄  got=19.0 want=20.0±3
+스크롤 이벤트: 프리뷰=1 에디터=1
+PASS  진동 없음 (프리뷰 이벤트 1회)
+재렌더 전 scrollTop=2335 후=2335
+PASS  재렌더 후 맨 위로 튀지 않았다
+PASS  재렌더 후 기준 줄 유지  got=83.0 want=83.0±3
+
+전부 통과
+=== chromium theme.html
+PASS  시작 시 system → 강제하지 않는다 (null)
+PASS  시작 시 실효 테마가 OS를 따른다
+PASS  라이트 → 구체값
+PASS    실효 테마
+PASS  다크 → 구체값
+PASS    네이티브가 CSS보다 먼저
+PASS    실효 테마
+PASS  시스템 → null (강제 해제)
+PASS    네이티브가 CSS보다 먼저
+PASS    실효 테마가 OS를 따른다
+
+set_theme 호출 순서: [null,"light","dark",null]
+전부 통과
+=== chromium popover.html
+haspopup=2개
+초기: heading=닫힘 code=닫힘 / heading:false code:false
+헤딩 열기: heading=열림(4항목) code=닫힘 / heading:true code:false / 포커스=h1
+H2 클릭: doc="## 제목\n\n본문 한 줄\n" / heading=닫힘 code=닫힘 / 포커스가 에디터=true
+재개방 선택표시=["h2"]
+Esc: heading=닫힘 code=닫힘 / 포커스가 에디터=true
+↓ 후=h2 ↑ 후=h1
+바깥 클릭: heading=닫힘 code=닫힘 / 포커스가 에디터=true
+코드 열기: heading=닫힘 code=열림(2항목)
+코드블록 클릭: doc="```\n## 제목\n```\n\n본문 한 줄\n" / heading=닫힘 code=닫힘
+보기 모드: 트리거 비활성=2/2 heading=닫힘 code=닫힘
+=== chromium copy.html
+PASS  pre 개수
+PASS  버튼 개수 = pre 개수
+PASS  언어 있는 블록에 버튼 1개
+PASS  언어 없는 블록에 버튼 1개
+PASS  mermaid 블록 존재
+PASS  mermaid 블록에 버튼 0개
+PASS  hover 전 버튼은 보이지 않음
+PASS  클립보드 호출됨
+PASS  복사된 텍스트 = 원문(ts)
+PASS  복사 표시가 붙음
+PASS  복사된 텍스트 = 원문(언어 없음)
+PASS  재렌더 후 버튼 다시 존재
+PASS  재렌더로 복사 표시는 초기화됨
+PASS  재렌더 후 클릭이 동작
+PASS  재렌더 후에도 복사 표시가 붙음
+모두 통과
+=== chromium /harness/keymap.html
+bold=**굵게** 기울임
+bold2=굵게 기울임
+italic=굵게 *기울임*
+=== webkit toolbar.html
+탭수=1
+초기(보기): 에디터=없음 프리뷰=있음 선택=["view"] 비활성=14/14
+편집: 에디터=없음 프리뷰=없음 선택=["edit"] 비활성=0/14
+분할: 에디터=있음 프리뷰=있음 선택=["split"] 비활성=0/14
+보기: 에디터=없음 프리뷰=있음 선택=["view"] 비활성=14/14
+버튼 굵게 → "**제목**\n\n본문 한 줄\n"
+F1(편집): 에디터=없음 프리뷰=없음 선택=["edit"] 비활성=0/14
+F2(분할): 에디터=있음 프리뷰=있음 선택=["split"] 비활성=0/14
+F3(보기): 에디터=없음 프리뷰=있음 선택=["view"] 비활성=14/14
+모달 중 F1(무효여야 함): 에디터=없음 프리뷰=있음 선택=["view"] 비활성=14/14
+=== webkit tabs.html?files=2
+PASS  탭 2개가 열렸다
+페인 상태: [{"hidden":true,"display":"none"},{"hidden":false,"display":"flex"}]
+PASS  보이는 페인은 정확히 1개
+PASS  감춰진 페인의 computed display
+전환 후: [{"hidden":false,"display":"flex"},{"hidden":true,"display":"none"}]
+PASS  전환 후에도 보이는 페인 1개
+
+전부 통과
+=== webkit scroll.html
+앵커 61개 (태그: h2,p,pre)
+PASS  h2 앵커 개수
+PASS  h2 앵커의 줄 번호가 원문과 일치
+PASS  코드블록(pre)에도 앵커가 있다
+PASS  프리뷰가 스크롤 가능한 높이
+PASS  에디터→프리뷰: 프리뷰 최상단 줄  got=102.0 want=103.0±3
+PASS  에디터→프리뷰: 에디터가 되밀리지 않음  got=102.0 want=103.0±3
+PASS  프리뷰→에디터: 에디터 최상단 줄  got=19.0 want=20.0±3
+스크롤 이벤트: 프리뷰=1 에디터=1
+PASS  진동 없음 (프리뷰 이벤트 1회)
+재렌더 전 scrollTop=2335 후=2335
+PASS  재렌더 후 맨 위로 튀지 않았다
+PASS  재렌더 후 기준 줄 유지  got=83.0 want=83.0±3
+
+전부 통과
+=== webkit theme.html
+PASS  시작 시 system → 강제하지 않는다 (null)
+PASS  시작 시 실효 테마가 OS를 따른다
+PASS  라이트 → 구체값
+PASS    실효 테마
+PASS  다크 → 구체값
+PASS    네이티브가 CSS보다 먼저
+PASS    실효 테마
+PASS  시스템 → null (강제 해제)
+PASS    네이티브가 CSS보다 먼저
+PASS    실효 테마가 OS를 따른다
+
+set_theme 호출 순서: [null,"light","dark",null]
+전부 통과
+=== webkit popover.html
+haspopup=2개
+초기: heading=닫힘 code=닫힘 / heading:false code:false
+헤딩 열기: heading=열림(4항목) code=닫힘 / heading:true code:false / 포커스=h1
+H2 클릭: doc="## 제목\n\n본문 한 줄\n" / heading=닫힘 code=닫힘 / 포커스가 에디터=true
+재개방 선택표시=["h2"]
+Esc: heading=닫힘 code=닫힘 / 포커스가 에디터=true
+↓ 후=h2 ↑ 후=h1
+바깥 클릭: heading=닫힘 code=닫힘 / 포커스가 에디터=true
+코드 열기: heading=닫힘 code=열림(2항목)
+코드블록 클릭: doc="```\n## 제목\n```\n\n본문 한 줄\n" / heading=닫힘 code=닫힘
+보기 모드: 트리거 비활성=2/2 heading=닫힘 code=닫힘
+=== webkit copy.html
+PASS  pre 개수
+PASS  버튼 개수 = pre 개수
+PASS  언어 있는 블록에 버튼 1개
+PASS  언어 없는 블록에 버튼 1개
+PASS  mermaid 블록 존재
+PASS  mermaid 블록에 버튼 0개
+PASS  hover 전 버튼은 보이지 않음
+PASS  클립보드 호출됨
+PASS  복사된 텍스트 = 원문(ts)
+PASS  복사 표시가 붙음
+PASS  복사된 텍스트 = 원문(언어 없음)
+PASS  재렌더 후 버튼 다시 존재
+PASS  재렌더로 복사 표시는 초기화됨
+PASS  재렌더 후 클릭이 동작
+PASS  재렌더 후에도 복사 표시가 붙음
+모두 통과
+=== webkit /harness/keymap.html
+bold=**굵게** 기울임
+bold2=굵게 기울임
+italic=굵게 *기울임*

@@ -1,0 +1,66 @@
+# markview 실행·검증 진입점.
+#
+# 설치: brew install go-task    사용: task --list
+#
+# package.json 의 dev/build 스크립트는 지우면 안 된다 —
+# tauri.conf.json 의 beforeDevCommand / beforeBuildCommand 가 직접 호출한다.
+# 배포(pnpm release)는 되돌릴 수 없는 공개라 여기 두지 않는다 — DEPLOY.md 참고.
+version: "3"
+
+vars:
+  CARGO: src-tauri/Cargo.toml
+
+tasks:
+  default:
+    desc: 사용 가능한 task 목록
+    cmds:
+      - task --list
+    silent: true
+
+  # ─────────────────────────── 실행 ───────────────────────────
+
+  setup:
+    desc: 의존성 설치 (node 패키지 · 하네스용 Playwright 브라우저)
+    cmds:
+      - pnpm install
+      # 하네스(harness/run.mjs)가 Chromium과 WebKit으로 돈다. 이미 있으면 건너뛴다.
+      - pnpm exec playwright install chromium webkit
+
+  dev:
+    desc: 개발 모드로 앱 실행 (pnpm tauri dev)
+    preconditions:
+      # tauri.conf.json 의 devUrl 이 1420 고정이라 다른 Vite가 쓰고 있으면 바로 실패한다.
+      - sh: "! lsof -iTCP:1420 -sTCP:LISTEN -t >/dev/null 2>&1"
+        msg: "포트 1420을 다른 프로세스가 쓰고 있습니다 — `lsof -iTCP:1420 -sTCP:LISTEN`로 확인하고 끈 뒤 다시 실행하세요."
+    cmds:
+      - pnpm tauri dev
+
+  build:
+    desc: 릴리스 번들 빌드 (.app + .dmg)
+    cmds:
+      - pnpm tauri build
+
+  build:app:
+    desc: 빠른 디버그 .app 번들 (Dock 아이콘·파일 연결 확인용)
+    cmds:
+      - pnpm tauri build --debug --bundles app
+
+  # ─────────────────────────── 검증 ───────────────────────────
+
+  test:
+    desc: 빠른 테스트 (서식 명령 · 배포 스크립트 · Rust)
+    cmds:
+      - pnpm test:format
+      - pnpm test:scripts
+      - cargo test --manifest-path {{.CARGO}}
+
+  check:
+    desc: 완료 검사 C1~C5 전체 (빌드 · Muya 원본 대조 · 편집 하네스 · 회귀 골든 · 초기 로드 크기)
+    cmds:
+      - pnpm build
+      - cargo check --manifest-path {{.CARGO}}
+      - node scripts/check-muya-vendor.mjs
+      - node harness/run.mjs muya
+      - node harness/run.mjs regression
+      - task: test
+      - node scripts/check-initial-size.mjs
