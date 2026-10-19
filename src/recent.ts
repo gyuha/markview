@@ -115,7 +115,7 @@ export function openRecentDialog(open: (path: string) => void): void {
 
   // 캡처 단계에서 잡아 에디터 키맵보다 먼저 처리한다. 한글 조합 중 Enter는 조합 확정이므로 건드리지 않는다.
   const onKey = (event: KeyboardEvent) => {
-    if (event.isComposing) return;
+    if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "Escape") {
       event.preventDefault();
       close();
