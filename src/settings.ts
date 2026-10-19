@@ -6,6 +6,7 @@
 import { deriveColors } from "./themeColors";
 import { COLOR_THEMES, type ColorTheme, type ThemeKind } from "./themes.generated";
 import { readColorTheme, saveColorTheme, type Choice } from "./theme";
+import { readRestoreSession, saveRestoreSession } from "./session";
 
 export interface SettingsHost {
   getChoice(): Choice;
@@ -270,7 +271,77 @@ export function openSettings(host: SettingsHost): void {
   closeButton.textContent = "닫기";
   actions.appendChild(closeButton);
 
-  box.append(heading, modeSection, colorSection, actions);
+  // --- 환경: 시작 시 지난 세션 복원 ---
+  const restoreSection = document.createElement("section");
+  const restoreRow = document.createElement("div");
+  restoreRow.className = "settings-switch-row";
+  const restoreText = document.createElement("div");
+  const restoreLabel = document.createElement("div");
+  restoreLabel.className = "settings-switch-label";
+  restoreLabel.textContent = "시작 시 지난 세션 복원";
+  const restoreHint = document.createElement("div");
+  restoreHint.className = "settings-switch-hint";
+  restoreHint.textContent = "파일을 지정하지 않고 앱을 켜면 마지막에 열려 있던 탭을 그대로 엽니다.";
+  restoreText.append(restoreLabel, restoreHint);
+  const restoreSwitch = document.createElement("button");
+  restoreSwitch.type = "button";
+  restoreSwitch.className = "settings-switch";
+  restoreSwitch.setAttribute("role", "switch");
+  restoreSwitch.setAttribute("aria-label", "시작 시 지난 세션 복원");
+  const syncRestore = () => restoreSwitch.setAttribute("aria-checked", String(readRestoreSession()));
+  restoreSwitch.addEventListener("click", () => {
+    saveRestoreSession(!readRestoreSession());
+    syncRestore();
+  });
+  syncRestore();
+  restoreRow.append(restoreText, restoreSwitch);
+  restoreSection.appendChild(restoreRow);
+
+  // --- 탭: 모양 · 환경. 열면 항상 "모양"이 먼저 보이고, ←/→로 전환한다. ---
+  const panels: { label: string; nodes: HTMLElement[] }[] = [
+    { label: "모양", nodes: [modeSection, colorSection] },
+    { label: "환경", nodes: [restoreSection] },
+  ];
+  const tablist = document.createElement("div");
+  tablist.className = "settings-tabs";
+  tablist.setAttribute("role", "tablist");
+  tablist.setAttribute("aria-label", "설정 분류");
+  const tabButtons: HTMLButtonElement[] = [];
+  const panelEls: HTMLElement[] = [];
+  const showPanel = (index: number) => {
+    tabButtons.forEach((b, i) => {
+      b.setAttribute("aria-selected", String(i === index));
+      b.tabIndex = i === index ? 0 : -1;
+      b.classList.toggle("active", i === index);
+    });
+    panelEls.forEach((p, i) => (p.hidden = i !== index));
+  };
+  panels.forEach(({ label, nodes }, index) => {
+    const tabButton = document.createElement("button");
+    tabButton.type = "button";
+    tabButton.className = "settings-tab";
+    tabButton.setAttribute("role", "tab");
+    tabButton.textContent = label;
+    tabButton.addEventListener("click", () => showPanel(index));
+    tabButton.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+      event.preventDefault();
+      const next = (index + (event.key === "ArrowRight" ? 1 : -1) + panels.length) % panels.length;
+      showPanel(next);
+      tabButtons[next].focus();
+    });
+    tabButtons.push(tabButton);
+    tablist.appendChild(tabButton);
+
+    const panel = document.createElement("div");
+    panel.className = "settings-panel";
+    panel.setAttribute("role", "tabpanel");
+    panel.append(...nodes);
+    panelEls.push(panel);
+  });
+  showPanel(0);
+
+  box.append(heading, tablist, ...panelEls, actions);
   backdrop.appendChild(box);
   document.body.appendChild(backdrop);
   syncModes();

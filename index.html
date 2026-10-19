@@ -12,6 +12,21 @@
       <div id="tabbar" role="tablist"></div>
     </header>
     <div id="toolbar">
+      <div id="file-actions" aria-label="파일">
+        <button type="button" id="open-button" class="fmt" aria-label="열기" title="열기 (⌘O)">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H7.5a2 2 0 0 0-1.9 1.4L3 18Z" />
+            <path d="M5.6 11.4A2 2 0 0 1 7.5 10H22l-2.4 8.2a2 2 0 0 1-1.9 1.4H3" />
+          </svg>
+        </button>
+        <button type="button" id="recent-button" class="fmt" aria-label="최근 파일" title="최근 파일 (⇧⌘O)">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v5l3 2" />
+          </svg>
+        </button>
+        <span class="fmt-sep"></span>
+      </div>
       <div id="format" aria-label="서식">
         <button type="button" class="fmt fmt-glyph" data-format="bold" aria-label="굵게" title="굵게 (⌘B)">
           B
@@ -238,7 +253,11 @@
       </div>
     </div>
     <div id="panes">
-      <p id="empty">마크다운 파일을 이 창으로 끌어다 놓으세요.</p>
+      <div id="empty">
+        <p>마크다운 파일을 이 창으로 끌어다 놓으세요.</p>
+        <p><button id="empty-open" type="button">파일 열기 <kbd>⌘O</kbd></button></p>
+        <p>최근 파일 목록은 <kbd>⇧⌘O</kbd></p>
+      </div>
     </div>
     <div id="notice" hidden></div>
   </body>

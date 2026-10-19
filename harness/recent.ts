@@ -24,10 +24,10 @@ interface HTab {
 const tabsOf = (win: Window = window) => (win as unknown as { __MARKVIEW_TABS__: HTab[] }).__MARKVIEW_TABS__;
 const activeTabPath = () => tabsOf().find((t) => !t.pane.hidden)?.path ?? null;
 
-function key(win: Window, k: string, mods: { meta?: boolean; ctrl?: boolean } = {}, target?: EventTarget, code?: string): void {
+function key(win: Window, k: string, mods: { meta?: boolean; ctrl?: boolean; shift?: boolean } = {}, target?: EventTarget, code?: string): void {
   const Ctor = (win as unknown as { KeyboardEvent: typeof KeyboardEvent }).KeyboardEvent;
   const t = target ?? (win.document.activeElement as EventTarget | null) ?? win.document.body;
-  t.dispatchEvent(new Ctor("keydown", { key: k, code, metaKey: !!mods.meta, ctrlKey: !!mods.ctrl, bubbles: true, cancelable: true }));
+  t.dispatchEvent(new Ctor("keydown", { key: k, code, metaKey: !!mods.meta, ctrlKey: !!mods.ctrl, shiftKey: !!mods.shift, bubbles: true, cancelable: true }));
 }
 const dialogOf = (doc: Document = document) => doc.querySelector<HTMLElement>('.modal-backdrop [role="dialog"]');
 const inputOf = (doc: Document = document) => dialogOf(doc)?.querySelector<HTMLInputElement>('input[type="search"]') ?? null;
@@ -36,8 +36,9 @@ const optionsOf = (doc: Document = document) =>
 const pathsOf = (doc: Document = document) => optionsOf(doc).map((o) => o.dataset.path);
 const selectedOf = (doc: Document = document) => optionsOf(doc).findIndex((o) => o.getAttribute("aria-selected") === "true");
 
+// 최근 파일 다이얼로그는 ⇧⌘O(Shift+Ctrl+O)다. ⌘O 단독은 파일 선택창(pick_markdown)이다.
 async function openDialog(mods: { meta?: boolean; ctrl?: boolean } = { meta: true }): Promise<HTMLElement | null> {
-  key(window, "o", mods, document.body);
+  key(window, "O", { ...mods, shift: true }, document.body);
   await wait(80);
   return dialogOf();
 }
@@ -65,6 +66,29 @@ async function main(): Promise<void> {
   const P = (n: number) => (n === 1 ? "/tmp/harness.md" : `/tmp/harness-${n}.md`);
 
   if (files === 0) {
+    // R18 — 열린 파일이 없는 빈 화면: 파일 열기·최근 파일 안내를 보이고, 파일 열기를 클릭하면 선택창(pick_markdown)이 뜬다.
+    const empty = document.querySelector<HTMLElement>("#empty");
+    const openBtn = document.querySelector<HTMLButtonElement>("#empty-open");
+    const hint = empty?.textContent ?? "";
+    const picksBefore = mockCalls().filter((c) => c.cmd === "pick_markdown").length;
+    openBtn?.click();
+    await wait(150);
+    const picksAfter = mockCalls().filter((c) => c.cmd === "pick_markdown").length;
+    check("R18", "빈 화면에 파일 열기(⌘O)·최근 파일(⇧⌘O) 안내가 있고, 파일 열기를 클릭하면 pick_markdown이 불린다", !!empty && !empty.hidden && hint.includes("⌘O") && hint.includes("⇧⌘O") && !!openBtn && picksAfter === picksBefore + 1, `visible=${!!empty && !empty.hidden} hasO=${hint.includes("⌘O")} hasShiftO=${hint.includes("⇧⌘O")} btn=${!!openBtn} picks=${picksBefore}->${picksAfter}`);
+    // R19 — 툴바 왼쪽(서식 버튼 앞)의 열기·최근 파일 아이콘: 열기는 pick_markdown, 최근 파일은 최근 다이얼로그를 연다.
+    const openIcon = document.querySelector<HTMLButtonElement>("#open-button");
+    const recentIcon = document.querySelector<HTMLButtonElement>("#recent-button");
+    const formatBar = document.querySelector<HTMLElement>("#format");
+    const leftOfFormat = (el: Element | null) => !!el && !!formatBar && !!(el.compareDocumentPosition(formatBar) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const iconPicksBefore = mockCalls().filter((c) => c.cmd === "pick_markdown").length;
+    openIcon?.click();
+    await wait(150);
+    const iconPicksAfter = mockCalls().filter((c) => c.cmd === "pick_markdown").length;
+    recentIcon?.click();
+    await wait(100);
+    const recentOpened = !!dialogOf();
+    await closeDialog();
+    check("R19", "툴바 왼쪽(서식 앞)의 열기·최근 파일 아이콘: 열기 클릭 → pick_markdown, 최근 파일 클릭 → 최근 다이얼로그", !!openIcon && !!recentIcon && leftOfFormat(openIcon) && leftOfFormat(recentIcon) && !!openIcon.getAttribute("aria-label") && !!recentIcon.getAttribute("aria-label") && iconPicksAfter === iconPicksBefore + 1 && recentOpened, `open=${!!openIcon} recent=${!!recentIcon} left=${leftOfFormat(openIcon)}/${leftOfFormat(recentIcon)} picks=${iconPicksBefore}->${iconPicksAfter} dialog=${recentOpened}`);
     const d = await openDialog();
     check("R12", "기록이 없으면 빈 상태 문구를 보인다", !!d && optionsOf().length === 0 && !!d.querySelector(".recent-empty"), `dialog=${!!d} options=${optionsOf().length}`);
     return;
@@ -82,15 +106,15 @@ async function main(): Promise<void> {
   // R01
   let d = await openDialog();
   const input = inputOf();
-  check("R01", "⌘O로 role=dialog가 열리고 검색창에 포커스", !!d && !!input && document.activeElement === input, `dialog=${!!d} focus=${document.activeElement?.tagName}`);
+  check("R01", "⇧⌘O로 role=dialog가 열리고 검색창에 포커스", !!d && !!input && document.activeElement === input, `dialog=${!!d} focus=${document.activeElement?.tagName}`);
   await closeDialog();
   d = await openDialog({ ctrl: true });
-  check("R01", "Ctrl+O도 같다", !!d && document.activeElement === inputOf(), `dialog=${!!d}`);
+  check("R01", "Shift+Ctrl+O도 같다", !!d && document.activeElement === inputOf(), `dialog=${!!d}`);
   await closeDialog();
-  // R14 — 한글 2벌식에서 ⌘O는 key가 'ㅐ'로 오고 물리 키는 code가 KeyO다.
-  key(window, "ㅐ", { meta: true }, document.body, "KeyO");
+  // R14 — 한글 2벌식에서 ⇧⌘O는 key가 'ㅒ'로 오고 물리 키는 code가 KeyO다.
+  key(window, "ㅒ", { meta: true, shift: true }, document.body, "KeyO");
   await wait(80);
-  check("R14", "한글 입력 상태(key='ㅐ', code=KeyO)의 ⌘O도 다이얼로그를 연다", !!dialogOf(), `dialog=${!!dialogOf()}`);
+  check("R14", "한글 입력 상태(key='ㅒ', code=KeyO)의 ⇧⌘O도 다이얼로그를 연다", !!dialogOf(), `dialog=${!!dialogOf()}`);
   await closeDialog();
   d = await openDialog({ ctrl: true });
 
@@ -211,9 +235,36 @@ async function main(): Promise<void> {
   await new Promise((r) => frame.addEventListener("load", r, { once: true }));
   await wait(600);
   const cw = frame.contentWindow!;
-  key(cw, "o", { meta: true }, cw.document.body);
+  key(cw, "O", { meta: true, shift: true }, cw.document.body);
   await wait(120);
   check("R11", "새로 읽은 문서에서도 목록이 유지된다", expected.length === 3 && same(pathsOf(cw.document), expected), `want=${JSON.stringify(expected)} got=${JSON.stringify(pathsOf(cw.document))}`);
+
+  // R15~R17 — ⌘O 단독은 파일 선택창(Rust 커맨드 pick_markdown)이다. 모킹이 고른 경로를 돌려준다.
+  const picks = () => mockCalls().filter((c) => c.cmd === "pick_markdown").length;
+  const reads = (path: string) => mockCalls().filter((c) => c.cmd === "read_markdown" && c.args?.path === path).length;
+  const PICKED = "/tmp/harness-picked.md";
+  const setPick = (v: string | null) => ((window as unknown as { __PICK_MARKDOWN__: string | null }).__PICK_MARKDOWN__ = v);
+  await closeDialog();
+  setPick(PICKED);
+  const picks0 = picks();
+  key(window, "o", { meta: true }, document.body);
+  await wait(250);
+  const dialogAfterPick = !!dialogOf();
+  check("R15", "⌘O는 pick_markdown을 부르고, 돌려준 경로가 read_markdown으로 읽혀 탭으로 열린다", picks() === picks0 + 1 && reads(PICKED) === 1 && tabsOf().some((t) => t.path === PICKED) && activeTabPath() === PICKED, `picks=${picks0}->${picks()} reads=${reads(PICKED)} active=${activeTabPath()}`);
+  setPick("/tmp/harness-picked-2.md");
+  const picks1 = picks();
+  key(window, "ㅐ", { meta: true }, document.body, "KeyO");
+  await wait(250);
+  check("R15", "한글 입력 상태(key='ㅐ', code=KeyO)의 ⌘O도 pick_markdown을 부른다", picks() === picks1 + 1 && tabsOf().some((t) => t.path === "/tmp/harness-picked-2.md"), `picks=${picks1}->${picks()}`);
+  setPick(null);
+  const picks2 = picks();
+  const tabCount = tabsOf().length;
+  const activeBefore = activeTabPath();
+  const readsTotal = mockCalls().filter((c) => c.cmd === "read_markdown").length;
+  key(window, "o", { meta: true }, document.body);
+  await wait(250);
+  check("R16", "선택을 취소(null)하면 탭 수·활성 탭·read_markdown 호출이 그대로다", picks() === picks2 + 1 && tabsOf().length === tabCount && activeTabPath() === activeBefore && mockCalls().filter((c) => c.cmd === "read_markdown").length === readsTotal, `picks=${picks2}->${picks()} tabs=${tabCount}->${tabsOf().length} reads=${readsTotal}`);
+  check("R17", "⌘O 단독은 최근 파일 다이얼로그를 열지 않는다", !dialogAfterPick && !dialogOf(), `afterPick=${dialogAfterPick} afterCancel=${!!dialogOf()}`);
 }
 
 if (!params.has("child")) {

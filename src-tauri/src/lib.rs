@@ -249,6 +249,20 @@ fn pick_image(app: AppHandle, opened: tauri::State<OpenedPaths>, doc_path: Strin
     assets::store_file(&set, &doc, &path).map(Some)
 }
 
+/// ⌘O의 "파일 열기" 대화상자. Rust가 창을 띄우고 고른 경로만 돌려준다(취소면 None).
+/// 읽기와 asset scope는 건드리지 않는다 — JS가 이 경로를 read_markdown에 넘기면 거기서 확장자·크기·존재를
+/// 다시 검증한다. pick_image와 같은 이유로 JS 대화상자 API는 쓰지 않는다.
+#[tauri::command(async)]
+fn pick_markdown(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .add_filter("마크다운", &ALLOWED_EXT)
+        .blocking_pick_file()
+        .and_then(|p| p.into_path().ok())
+        .map(|p| p.to_string_lossy().to_string())
+}
+
 /// 이미지 경로 입력의 자동 완성(문서 폴더 기준).
 #[tauri::command]
 fn list_image_paths(
@@ -417,6 +431,7 @@ pub fn run() {
             save_asset,
             copy_asset,
             pick_image,
+            pick_markdown,
             list_image_paths
         ])
         .build(tauri::generate_context!())
