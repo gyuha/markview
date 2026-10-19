@@ -66,6 +66,15 @@ async function main(): Promise<void> {
   const P = (n: number) => (n === 1 ? "/tmp/harness.md" : `/tmp/harness-${n}.md`);
 
   if (files === 0) {
+    // R18 — 열린 파일이 없는 빈 화면: 파일 열기·최근 파일 안내를 보이고, 파일 열기를 클릭하면 선택창(pick_markdown)이 뜬다.
+    const empty = document.querySelector<HTMLElement>("#empty");
+    const openBtn = document.querySelector<HTMLButtonElement>("#empty-open");
+    const hint = empty?.textContent ?? "";
+    const picksBefore = mockCalls().filter((c) => c.cmd === "pick_markdown").length;
+    openBtn?.click();
+    await wait(150);
+    const picksAfter = mockCalls().filter((c) => c.cmd === "pick_markdown").length;
+    check("R18", "빈 화면에 파일 열기(⌘O)·최근 파일(⇧⌘O) 안내가 있고, 파일 열기를 클릭하면 pick_markdown이 불린다", !!empty && !empty.hidden && hint.includes("⌘O") && hint.includes("⇧⌘O") && !!openBtn && picksAfter === picksBefore + 1, `visible=${!!empty && !empty.hidden} hasO=${hint.includes("⌘O")} hasShiftO=${hint.includes("⇧⌘O")} btn=${!!openBtn} picks=${picksBefore}->${picksAfter}`);
     const d = await openDialog();
     check("R12", "기록이 없으면 빈 상태 문구를 보인다", !!d && optionsOf().length === 0 && !!d.querySelector(".recent-empty"), `dialog=${!!d} options=${optionsOf().length}`);
     return;

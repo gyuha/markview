@@ -964,6 +964,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   tabbarEl = document.querySelector<HTMLElement>("#tabbar")!;
   panesEl = document.querySelector<HTMLElement>("#panes")!;
   emptyEl = document.querySelector<HTMLElement>("#empty")!;
+  document.querySelector<HTMLElement>("#empty-open")!.addEventListener("click", () => void pickAndOpen());
   noticeEl = document.querySelector<HTMLElement>("#notice")!;
   installViewModeControl();
   installFormatControl();
