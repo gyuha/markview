@@ -156,10 +156,39 @@ async function muya() {
   return bad === 0 ? 0 : 1;
 }
 
+// 최근 파일 다이얼로그. harness/required-recent.txt의 ID가 두 엔진 모두 PASS이고 FAIL이 0개인가.
+async function recent() {
+  const specs = ["recent.html?files=3", "recent.html?files=25", "recent.html?files=0"];
+  const required = readFileSync("harness/required-recent.txt", "utf8")
+    .split("\n")
+    .map((l) => l.match(/^(R\d{2})\s/)?.[1])
+    .filter(Boolean);
+  generate(["recent"]);
+  const results = await withServer((base) =>
+    runSpecs(base, specs, { until: (t) => /(^|\n)DONE\s*$/.test(t), timeoutMs: 60000 }),
+  );
+  let bad = 0;
+  for (const r of results) {
+    console.log(`=== ${r.engine} ${r.spec}${r.timedOut ? "  (시간 초과 — DONE 없음)" : ""}\n${r.txt}`);
+    if (r.timedOut) bad++;
+  }
+  for (const engine of ENGINES.map((e) => e.name())) {
+    const lines = results.filter((r) => r.engine === engine).flatMap((r) => r.txt.split("\n"));
+    const fails = lines.filter((l) => /^FAIL\b/.test(l));
+    const passed = new Set(lines.map((l) => l.match(/^PASS\s+\[(R\d{2})\]/)?.[1]).filter(Boolean));
+    const missing = required.filter((id) => !passed.has(id));
+    console.log(`${engine}: 필수 ${required.length}개 중 PASS ${required.length - missing.length}개 · FAIL 줄 ${fails.length}개`);
+    if (missing.length) console.log(`  PASS 없음: ${missing.join(" ")}`);
+    bad += fails.length + missing.length;
+  }
+  console.log(bad === 0 ? "PASS  최근 파일 하네스 전부 통과" : `FAIL  최근 파일 하네스 문제 ${bad}건`);
+  return bad === 0 ? 0 : 1;
+}
+
 const mode = process.argv[2];
-const modes = { regression, muya };
+const modes = { regression, muya, recent };
 if (!modes[mode]) {
-  console.error("사용법: node harness/run.mjs <regression|muya>");
+  console.error("사용법: node harness/run.mjs <regression|muya|recent>");
   process.exit(64);
 }
 process.exit(await modes[mode]());

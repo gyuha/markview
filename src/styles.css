@@ -996,3 +996,57 @@ html[data-theme="dark"] .mu-editor .token.deleted {
   background: var(--link);
   border-radius: 50%;
 }
+
+/* 최근 파일 다이얼로그 */
+.recent-modal {
+  width: 32rem;
+  max-width: 90vw;
+}
+
+.recent-search {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0 0 0.6rem;
+  padding: 0.4rem 0.55rem;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.recent-list {
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.recent-item {
+  display: flex;
+  flex-direction: column;
+  padding: 0.35rem 0.55rem;
+  cursor: default;
+  border-radius: 6px;
+}
+
+.recent-item[aria-selected="true"] {
+  background: var(--code-bg);
+}
+
+.recent-name {
+  font-size: 0.9rem;
+}
+
+.recent-dir {
+  overflow: hidden;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-empty {
+  margin: 0.4rem 0.55rem;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}

@@ -2,10 +2,14 @@
   const DOC = { path: "/tmp/harness.md", text: "제목\n\n본문 한 줄\n", mtime_ms: 1 };
   // ?files=N 으로 탭 여러 개를 열 수 있다. 기본 1이라 기존 하네스는 영향받지 않는다.
   const fileCount = Number(new URLSearchParams(location.search).get("files") ?? 1);
-  const paths = [
-    DOC.path,
-    ...Array.from({ length: Math.max(0, fileCount - 1) }, (_, i) => `/tmp/harness-${i + 2}.md`),
-  ];
+  // ?files=0 이면 시작 시 아무 파일도 열리지 않는다(기록 없는 첫 실행 재현).
+  const paths =
+    fileCount === 0
+      ? []
+      : [
+          DOC.path,
+          ...Array.from({ length: Math.max(0, fileCount - 1) }, (_, i) => `/tmp/harness-${i + 2}.md`),
+        ];
 
   // 하네스가 관측할 호출 기록. 각 호출에 그 시점의 data-theme을 함께 남긴다 —
   // 네이티브 테마 적용이 CSS 적용보다 먼저인지를 동기적으로 판정할 수 있다.
