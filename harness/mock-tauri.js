@@ -41,6 +41,8 @@
       });
       if (cmd === "read_markdown") return { ...DOC, path: args?.path ?? DOC.path };
       if (cmd === "take_pending_files") return paths;
+      // ⌘O의 네이티브 파일 선택창. 하네스가 고른 경로(또는 null=취소)를 window.__PICK_MARKDOWN__에 둔다.
+      if (cmd === "pick_markdown") return window.__PICK_MARKDOWN__ ?? null;
       if (cmd === "plugin:event|listen") return 1;
       return null;
     },

@@ -586,6 +586,12 @@ function createTabButton(path: string): HTMLElement {
   return button;
 }
 
+/** ⌘O — Rust가 파일 선택창을 띄우고 고른 경로만 돌려준다(취소면 null). 여는 일은 openPath가 한다. */
+async function pickAndOpen(): Promise<void> {
+  const path = await invoke<string | null>("pick_markdown");
+  if (path) await openPath(path);
+}
+
 /** 같은 경로가 이미 열려 있으면 새 탭을 만들지 않고 그 탭을 활성화한다. */
 async function openPath(path: string): Promise<void> {
   const existing = findTab(path);
@@ -1001,12 +1007,14 @@ window.addEventListener("DOMContentLoaded", async () => {
       void reloadActive();
       return;
     }
-    // ⌘O도 기본 메뉴에 없다 — 최근 파일 다이얼로그. 모달이 떠 있으면 위에서 이미 걸러진다.
+    // ⌘O는 파일 열기 대화상자, ⇧⌘O는 최근 파일 다이얼로그 — 둘 다 기본 메뉴에 없다.
+    // 모달이 떠 있으면 위에서 이미 걸러진다.
     // 한글 등 비라틴 입력 상태에선 key가 'ㅐ'로 오므로 이때만 물리 키(code)로 본다.
-    if ((key === "o" || (!/^[a-z]$/.test(key) && event.code === "KeyO")) && !event.shiftKey && !event.altKey) {
+    if ((key === "o" || (!/^[a-z]$/.test(key) && event.code === "KeyO")) && !event.altKey) {
       event.preventDefault();
       event.stopPropagation();
-      openRecentDialog((path) => void openPath(path));
+      if (event.shiftKey) openRecentDialog((path) => void openPath(path));
+      else void pickAndOpen();
       return;
     }
     // ⌘E는 기본 메뉴에 없으므로 여기서 잡힌다 (⌘W와 달리 메뉴 재조립이 불필요).
