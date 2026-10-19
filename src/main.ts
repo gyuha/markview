@@ -965,6 +965,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   panesEl = document.querySelector<HTMLElement>("#panes")!;
   emptyEl = document.querySelector<HTMLElement>("#empty")!;
   document.querySelector<HTMLElement>("#empty-open")!.addEventListener("click", () => void pickAndOpen());
+  document.querySelector<HTMLElement>("#open-button")!.addEventListener("click", () => void pickAndOpen());
+  document.querySelector<HTMLElement>("#recent-button")!.addEventListener("click", () => openRecentDialog((path) => void openPath(path)));
   noticeEl = document.querySelector<HTMLElement>("#notice")!;
   installViewModeControl();
   installFormatControl();

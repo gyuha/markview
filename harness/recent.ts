@@ -75,6 +75,20 @@ async function main(): Promise<void> {
     await wait(150);
     const picksAfter = mockCalls().filter((c) => c.cmd === "pick_markdown").length;
     check("R18", "빈 화면에 파일 열기(⌘O)·최근 파일(⇧⌘O) 안내가 있고, 파일 열기를 클릭하면 pick_markdown이 불린다", !!empty && !empty.hidden && hint.includes("⌘O") && hint.includes("⇧⌘O") && !!openBtn && picksAfter === picksBefore + 1, `visible=${!!empty && !empty.hidden} hasO=${hint.includes("⌘O")} hasShiftO=${hint.includes("⇧⌘O")} btn=${!!openBtn} picks=${picksBefore}->${picksAfter}`);
+    // R19 — 툴바 왼쪽(서식 버튼 앞)의 열기·최근 파일 아이콘: 열기는 pick_markdown, 최근 파일은 최근 다이얼로그를 연다.
+    const openIcon = document.querySelector<HTMLButtonElement>("#open-button");
+    const recentIcon = document.querySelector<HTMLButtonElement>("#recent-button");
+    const formatBar = document.querySelector<HTMLElement>("#format");
+    const leftOfFormat = (el: Element | null) => !!el && !!formatBar && !!(el.compareDocumentPosition(formatBar) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const iconPicksBefore = mockCalls().filter((c) => c.cmd === "pick_markdown").length;
+    openIcon?.click();
+    await wait(150);
+    const iconPicksAfter = mockCalls().filter((c) => c.cmd === "pick_markdown").length;
+    recentIcon?.click();
+    await wait(100);
+    const recentOpened = !!dialogOf();
+    await closeDialog();
+    check("R19", "툴바 왼쪽(서식 앞)의 열기·최근 파일 아이콘: 열기 클릭 → pick_markdown, 최근 파일 클릭 → 최근 다이얼로그", !!openIcon && !!recentIcon && leftOfFormat(openIcon) && leftOfFormat(recentIcon) && !!openIcon.getAttribute("aria-label") && !!recentIcon.getAttribute("aria-label") && iconPicksAfter === iconPicksBefore + 1 && recentOpened, `open=${!!openIcon} recent=${!!recentIcon} left=${leftOfFormat(openIcon)}/${leftOfFormat(recentIcon)} picks=${iconPicksBefore}->${iconPicksAfter} dialog=${recentOpened}`);
     const d = await openDialog();
     check("R12", "기록이 없으면 빈 상태 문구를 보인다", !!d && optionsOf().length === 0 && !!d.querySelector(".recent-empty"), `dialog=${!!d} options=${optionsOf().length}`);
     return;
