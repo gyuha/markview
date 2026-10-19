@@ -8,6 +8,7 @@ import { isolateHistory } from "@codemirror/commands";
 import { applyEditorTheme, createEditor } from "./editor";
 import { activeHeading, applyFormat, type FormatId } from "./format";
 import { confirmDialog } from "./modal";
+import { openRecentDialog, recordRecent } from "./recent";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { MuyaEditor, MuyaHost } from "./muya";
@@ -584,6 +585,7 @@ async function openPath(path: string): Promise<void> {
   const existing = findTab(path);
   if (existing) {
     activate(existing.path);
+    recordRecent(existing.path);
     return;
   }
 
@@ -597,6 +599,7 @@ async function openPath(path: string): Promise<void> {
 
   if (findTab(doc.path)) {
     activate(doc.path);
+    recordRecent(doc.path);
     return;
   }
 
@@ -651,6 +654,7 @@ async function openPath(path: string): Promise<void> {
   tabs.push(tab);
   installScrollSync(tab);
   activate(doc.path);
+  recordRecent(doc.path);
   await paintMermaid(tab);
 }
 
@@ -976,6 +980,13 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (key === "r" && !event.shiftKey) {
       event.preventDefault();
       void reloadActive();
+      return;
+    }
+    // ⌘O도 기본 메뉴에 없다 — 최근 파일 다이얼로그. 모달이 떠 있으면 위에서 이미 걸러진다.
+    if (key === "o" && !event.shiftKey && !event.altKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      openRecentDialog((path) => void openPath(path));
       return;
     }
     // ⌘E는 기본 메뉴에 없으므로 여기서 잡힌다 (⌘W와 달리 메뉴 재조립이 불필요).
