@@ -24,10 +24,10 @@ interface HTab {
 const tabsOf = (win: Window = window) => (win as unknown as { __MARKVIEW_TABS__: HTab[] }).__MARKVIEW_TABS__;
 const activeTabPath = () => tabsOf().find((t) => !t.pane.hidden)?.path ?? null;
 
-function key(win: Window, k: string, mods: { meta?: boolean; ctrl?: boolean } = {}, target?: EventTarget): void {
+function key(win: Window, k: string, mods: { meta?: boolean; ctrl?: boolean } = {}, target?: EventTarget, code?: string): void {
   const Ctor = (win as unknown as { KeyboardEvent: typeof KeyboardEvent }).KeyboardEvent;
   const t = target ?? (win.document.activeElement as EventTarget | null) ?? win.document.body;
-  t.dispatchEvent(new Ctor("keydown", { key: k, metaKey: !!mods.meta, ctrlKey: !!mods.ctrl, bubbles: true, cancelable: true }));
+  t.dispatchEvent(new Ctor("keydown", { key: k, code, metaKey: !!mods.meta, ctrlKey: !!mods.ctrl, bubbles: true, cancelable: true }));
 }
 const dialogOf = (doc: Document = document) => doc.querySelector<HTMLElement>('.modal-backdrop [role="dialog"]');
 const inputOf = (doc: Document = document) => dialogOf(doc)?.querySelector<HTMLInputElement>('input[type="search"]') ?? null;
@@ -86,6 +86,13 @@ async function main(): Promise<void> {
   await closeDialog();
   d = await openDialog({ ctrl: true });
   check("R01", "Ctrl+O도 같다", !!d && document.activeElement === inputOf(), `dialog=${!!d}`);
+  await closeDialog();
+  // R14 — 한글 2벌식에서 ⌘O는 key가 'ㅐ'로 오고 물리 키는 code가 KeyO다.
+  key(window, "ㅐ", { meta: true }, document.body, "KeyO");
+  await wait(80);
+  check("R14", "한글 입력 상태(key='ㅐ', code=KeyO)의 ⌘O도 다이얼로그를 연다", !!dialogOf(), `dialog=${!!dialogOf()}`);
+  await closeDialog();
+  d = await openDialog({ ctrl: true });
 
   // R02
   const opts = optionsOf();

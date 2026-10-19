@@ -983,7 +983,8 @@ window.addEventListener("DOMContentLoaded", async () => {
       return;
     }
     // ⌘O도 기본 메뉴에 없다 — 최근 파일 다이얼로그. 모달이 떠 있으면 위에서 이미 걸러진다.
-    if (key === "o" && !event.shiftKey && !event.altKey) {
+    // 한글 등 비라틴 입력 상태에선 key가 'ㅐ'로 오므로 이때만 물리 키(code)로 본다.
+    if ((key === "o" || (!/^[a-z]$/.test(key) && event.code === "KeyO")) && !event.shiftKey && !event.altKey) {
       event.preventDefault();
       event.stopPropagation();
       openRecentDialog((path) => void openPath(path));
