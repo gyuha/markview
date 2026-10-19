@@ -814,6 +814,11 @@ function showSettings(): void {
     getChoice: () => choice,
     setChoice: selectChoice,
     onColorThemeChange: () => void applyTheme(),
+    hasUnsavedDocs: () => {
+      // Muya는 입력을 묶어 늦게 내보낸다 — 판정 전에 밀어내야 마지막 입력까지 수정됨으로 잡힌다.
+      for (const tab of tabs) tab.muya?.flush();
+      return tabs.some((tab) => tab.dirty);
+    },
   });
 }
 

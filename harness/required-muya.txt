@@ -45,4 +45,4 @@ P01  편집 모드에서 이미지 데이터(image/png File)를 붙여넣으면 
 P02  편집 모드 편집기 위에 이미지 파일 경로를 드롭(Tauri drag-drop 이벤트)하면 <문서 폴더>/assets/로 복사하는 IPC가 호출되고 상대 경로로 삽입된다
 P03  .md 파일을 드롭하면 편집 모드에서도 기존처럼 새 탭으로 열린다 (이미지로 삽입되지 않는다)
 P04  붙여넣기·드롭으로 삽입된 이미지가 Muya 안에서 convertFileSrc 값으로 표시된다
-D01  라이트/다크 전환 시 Muya 영역의 배경·글자색 computed 값이 앱 팔레트(라이트 #ffffff/#1f2328, 다크 #0d1117/#e6edf3)를 따르고, Muya mermaidTheme 옵션이 다크에서 'dark', 라이트에서 'default'다
+D01  라이트/다크 전환 시 Muya 영역의 배경·글자색 computed 값이 앱 팔레트(고른 색상 테마의 --bg/--fg 변수)를 따르고(두 모드의 팔레트는 서로 달라야 한다), Muya mermaidTheme 옵션이 다크에서 'dark', 라이트에서 'default'다

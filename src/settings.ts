@@ -7,12 +7,15 @@ import { deriveColors } from "./themeColors";
 import { COLOR_THEMES, type ColorTheme, type ThemeKind } from "./themes.generated";
 import { readColorTheme, saveColorTheme, type Choice } from "./theme";
 import { readRestoreSession, saveRestoreSession } from "./session";
+import { createUpdateSection } from "./updateSection";
 
 export interface SettingsHost {
   getChoice(): Choice;
   setChoice(choice: Choice): void;
   /** 색상 테마가 저장된 뒤 불린다 — 화면에 다시 칠한다. */
   onColorThemeChange(): void;
+  /** 저장하지 않은 문서가 있는지 — 업데이트로 다시 시작하면 사라진다. */
+  hasUnsavedDocs(): boolean;
 }
 
 const MODES: { value: Choice; label: string }[] = [
@@ -297,10 +300,13 @@ export function openSettings(host: SettingsHost): void {
   restoreRow.append(restoreText, restoreSwitch);
   restoreSection.appendChild(restoreRow);
 
-  // --- 탭: 모양 · 환경. 열면 항상 "모양"이 먼저 보이고, ←/→로 전환한다. ---
+  // --- 업데이트: 확인·설치는 Rust 커맨드가 한다(updateSection.ts). 열 때 네트워크 확인은 하지 않는다. ---
+  const update = createUpdateSection(host);
+
+  // --- 탭: 모양 · 환경. 열면 항상 "모양"이 먼저 보이고, ←/→로 전환한다. 업데이트는 "환경"에 둔다. ---
   const panels: { label: string; nodes: HTMLElement[] }[] = [
     { label: "모양", nodes: [modeSection, colorSection] },
-    { label: "환경", nodes: [restoreSection] },
+    { label: "환경", nodes: [restoreSection, update.section] },
   ];
   const tablist = document.createElement("div");
   tablist.className = "settings-tabs";
@@ -348,6 +354,7 @@ export function openSettings(host: SettingsHost): void {
 
   const close = () => {
     document.removeEventListener("keydown", onKey, true);
+    update.dispose();
     backdrop.remove();
     opened = false;
     opener?.focus?.();
@@ -355,6 +362,8 @@ export function openSettings(host: SettingsHost): void {
   // Esc: 열린 목록이 있으면 그것만 닫고, 없으면 대화상자를 닫는다. 캡처 단계에서 잡아 에디터 키맵보다 먼저 처리한다.
   const onKey = (event: KeyboardEvent) => {
     if (event.key !== "Escape") return;
+    // 위에 확인 대화상자가 떠 있으면 그 대화상자의 Esc다 — 설정 창까지 같이 닫지 않는다.
+    if (document.querySelectorAll(".modal-backdrop").length > 1) return;
     event.preventDefault();
     event.stopPropagation();
     const openSelect = selects.find((s) => s.isOpen());

@@ -5,6 +5,8 @@
 //   node harness/run.mjs colortheme   harness/colortheme.ts(색상 테마·설정 다이얼로그)가 두 엔진 모두 FAIL 0개인가
 //   node harness/run.mjs muya         harness/muya-*.ts 전부에서 harness/required-muya.txt의 ID가
 //                                     두 엔진 모두 PASS이고 FAIL이 0개인가
+//   node harness/run.mjs update       harness/update-*.ts 전부에서 harness/required-update.txt의 ID가
+//                                     두 엔진 모두 PASS이고 FAIL이 0개인가
 //
 // 이 파일과 golden/required 목록은 fg-loop 계약(.forge/loop.md)에 해시로 고정된 판정 기준이다.
 // 통과시키려고 고치지 않는다 — 기준이 틀렸다면 사람에게 넘긴다.
@@ -111,17 +113,17 @@ async function regression() {
   return 1;
 }
 
-async function muya() {
+async function idsRun(prefix, requiredFile, label) {
   const names = readdirSync("harness")
-    .filter((f) => /^muya-.*\.ts$/.test(f))
+    .filter((f) => new RegExp(`^${prefix}-.*\\.ts$`).test(f))
     .map((f) => f.replace(/\.ts$/, ""))
     .sort();
-  const required = readFileSync("harness/required-muya.txt", "utf8")
+  const required = readFileSync(requiredFile, "utf8")
     .split("\n")
     .map((l) => l.match(/^([A-Z]\d{2})\s/)?.[1])
     .filter(Boolean);
   if (names.length === 0) {
-    console.log("FAIL  harness/muya-*.ts 하네스가 하나도 없다");
+    console.log(`FAIL  harness/${prefix}-*.ts 하네스가 하나도 없다`);
     return 1;
   }
   generate(names);
@@ -153,7 +155,7 @@ async function muya() {
     if (missing.length) console.log(`  PASS 없음: ${missing.join(" ")}`);
     bad += fails.length + missing.length;
   }
-  console.log(bad === 0 ? "PASS  Muya 하네스 전부 통과" : `FAIL  Muya 하네스 문제 ${bad}건`);
+  console.log(bad === 0 ? `PASS  ${label} 하네스 전부 통과` : `FAIL  ${label} 하네스 문제 ${bad}건`);
   return bad === 0 ? 0 : 1;
 }
 
@@ -295,10 +297,14 @@ async function tabdrag() {
   return bad === 0 ? 0 : 1;
 }
 
+
+const muya = () => idsRun("muya", "harness/required-muya.txt", "Muya");
+const update = () => idsRun("update", "harness/required-update.txt", "업데이트");
+
 const mode = process.argv[2];
-const modes = { regression, muya, recent, colortheme, session, tabkeys, tabdrag };
+const modes = { regression, muya, update, recent, colortheme, session, tabkeys, tabdrag };
 if (!modes[mode]) {
-  console.error("사용법: node harness/run.mjs <regression|muya|recent|colortheme|session|tabkeys|tabdrag>");
+  console.error("사용법: node harness/run.mjs <regression|muya|update|recent|colortheme|session|tabkeys|tabdrag>");
   process.exit(64);
 }
 process.exit(await modes[mode]());

@@ -175,12 +175,23 @@ await guard(async () => {
 
   // ── D01 테마 ─────────────────────────────────────────────────────────
   const container = () => muya.domNode.querySelector(".mu-container")!;
+  // 앱 팔레트는 이제 고를 수 있는 색상 테마(112종)에서 오므로 상수가 아니라 앱의 변수 --bg/--fg(원천)와 비교한다.
+  // 변수를 요소에 걸어 computed 색으로 바꿔 읽는다(hex → rgb 변환을 브라우저에 맡긴다).
+  const appColors = () => {
+    const probe = document.createElement("div");
+    probe.style.cssText = "position:fixed;visibility:hidden;background:var(--bg);color:var(--fg)";
+    document.body.appendChild(probe);
+    const { backgroundColor, color } = getComputedStyle(probe);
+    probe.remove();
+    return { bg: backgroundColor, fg: color };
+  };
   const paint = async (choice: "light" | "dark", mermaid: string) => {
     document.querySelector<HTMLElement>(`#theme [data-choice="${choice}"]`)!.click();
     await waitFor(() => document.documentElement.dataset.theme === choice && muya.options.mermaidTheme === mermaid);
+    await wait(100);
     return {
-      bg: getComputedStyle(muya.domNode).backgroundColor,
-      fg: getComputedStyle(container()).color,
+      muya: { bg: getComputedStyle(muya.domNode).backgroundColor, fg: getComputedStyle(container()).color },
+      app: appColors(),
       mermaid: muya.options.mermaidTheme,
     };
   };
@@ -188,11 +199,17 @@ await guard(async () => {
   const dark = await paint("dark", "dark");
   eq(
     "D01",
-    "라이트/다크에서 Muya 배경·글자색·mermaid 테마가 앱 팔레트를 따른다",
-    { light, dark },
+    "라이트/다크에서 Muya 배경·글자색이 앱 팔레트(--bg/--fg)를 따르고 mermaid 테마가 짝을 이룬다",
     {
-      light: { bg: "rgb(255, 255, 255)", fg: "rgb(31, 35, 40)", mermaid: "default" },
-      dark: { bg: "rgb(13, 17, 23)", fg: "rgb(230, 237, 243)", mermaid: "dark" },
+      light: { ...light, followsApp: JSON.stringify(light.muya) === JSON.stringify(light.app) },
+      dark: { ...dark, followsApp: JSON.stringify(dark.muya) === JSON.stringify(dark.app) },
+      // 두 모드의 팔레트가 실제로 달라야 "따라간다"가 의미 있다.
+      modesDiffer: light.app.bg !== dark.app.bg,
+    },
+    {
+      light: { muya: light.app, app: light.app, mermaid: "default", followsApp: true },
+      dark: { muya: dark.app, app: dark.app, mermaid: "dark", followsApp: true },
+      modesDiffer: true,
     },
   );
   // 다음 하네스에 남기지 않는다(mock-tauri가 시작 시 지우지만 명시해 둔다).
