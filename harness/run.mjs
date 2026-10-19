@@ -239,10 +239,66 @@ async function colortheme() {
   return bad === 0 ? 0 : 1;
 }
 
+// ⌥+숫자 탭 전환 하네스. harness/required-tabkeys.txt의 ID가 두 엔진 모두 PASS이고 FAIL이 0개인가.
+async function tabkeys() {
+  const required = readFileSync("harness/required-tabkeys.txt", "utf8")
+    .split("\n")
+    .map((l) => l.match(/^(N\d{2})\s/)?.[1])
+    .filter(Boolean);
+  generate(["tabkeys"]);
+  const results = await withServer((base) =>
+    runSpecs(base, ["tabkeys.html?files=3"], { until: (t) => /(^|\n)DONE\s*$/.test(t), timeoutMs: 60000 }),
+  );
+  let bad = 0;
+  for (const r of results) {
+    console.log(`=== ${r.engine} ${r.spec}${r.timedOut ? "  (시간 초과 — DONE 없음)" : ""}\n${r.txt}`);
+    if (r.timedOut) bad++;
+  }
+  for (const engine of ENGINES.map((e) => e.name())) {
+    const lines = results.filter((r) => r.engine === engine).flatMap((r) => r.txt.split("\n"));
+    const fails = lines.filter((l) => /^FAIL\b/.test(l));
+    const passed = new Set(lines.map((l) => l.match(/^PASS\s+\[(N\d{2})\]/)?.[1]).filter(Boolean));
+    const missing = required.filter((id) => !passed.has(id));
+    console.log(`${engine}: 필수 ${required.length}개 중 PASS ${required.length - missing.length}개 · FAIL 줄 ${fails.length}개`);
+    if (missing.length) console.log(`  PASS 없음: ${missing.join(" ")}`);
+    bad += fails.length + missing.length;
+  }
+  console.log(bad === 0 ? "PASS  탭 전환 키 하네스 전부 통과" : `FAIL  탭 전환 키 하네스 문제 ${bad}건`);
+  return bad === 0 ? 0 : 1;
+}
+
+// 탭 끌어서 순서 바꾸기 하네스. harness/required-tabdrag.txt의 ID가 두 엔진 모두 PASS이고 FAIL이 0개인가.
+async function tabdrag() {
+  const required = readFileSync("harness/required-tabdrag.txt", "utf8")
+    .split("\n")
+    .map((l) => l.match(/^(D\d{2})\s/)?.[1])
+    .filter(Boolean);
+  generate(["tabdrag"]);
+  const results = await withServer((base) =>
+    runSpecs(base, ["tabdrag.html?files=3"], { until: (t) => /(^|\n)DONE\s*$/.test(t), timeoutMs: 60000 }),
+  );
+  let bad = 0;
+  for (const r of results) {
+    console.log(`=== ${r.engine} ${r.spec}${r.timedOut ? "  (시간 초과 — DONE 없음)" : ""}\n${r.txt}`);
+    if (r.timedOut) bad++;
+  }
+  for (const engine of ENGINES.map((e) => e.name())) {
+    const lines = results.filter((r) => r.engine === engine).flatMap((r) => r.txt.split("\n"));
+    const fails = lines.filter((l) => /^FAIL\b/.test(l));
+    const passed = new Set(lines.map((l) => l.match(/^PASS\s+\[(D\d{2})\]/)?.[1]).filter(Boolean));
+    const missing = required.filter((id) => !passed.has(id));
+    console.log(`${engine}: 필수 ${required.length}개 중 PASS ${required.length - missing.length}개 · FAIL 줄 ${fails.length}개`);
+    if (missing.length) console.log(`  PASS 없음: ${missing.join(" ")}`);
+    bad += fails.length + missing.length;
+  }
+  console.log(bad === 0 ? "PASS  탭 끌기 하네스 전부 통과" : `FAIL  탭 끌기 하네스 문제 ${bad}건`);
+  return bad === 0 ? 0 : 1;
+}
+
 const mode = process.argv[2];
-const modes = { regression, muya, recent, colortheme, session };
+const modes = { regression, muya, recent, colortheme, session, tabkeys, tabdrag };
 if (!modes[mode]) {
-  console.error("사용법: node harness/run.mjs <regression|muya|recent|colortheme|session>");
+  console.error("사용법: node harness/run.mjs <regression|muya|recent|colortheme|session|tabkeys|tabdrag>");
   process.exit(64);
 }
 process.exit(await modes[mode]());

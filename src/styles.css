@@ -329,8 +329,14 @@ html .editor-host ::selection {
   color: var(--fg-muted);
   white-space: nowrap;
   cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
   background: var(--code-bg);
   border-right: 1px solid var(--border);
+}
+
+.tab.dragging {
+  opacity: 0.6;
 }
 
 .tab.active {

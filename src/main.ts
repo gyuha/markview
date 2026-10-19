@@ -565,6 +565,57 @@ function closeTab(path: string): void {
   }
 }
 
+/** 끌기가 시작되려면 가로로 이만큼(px) 움직여야 한다. 그보다 적으면 클릭이다. */
+const TAB_DRAG_THRESHOLD = 4;
+/** 끌기가 막 끝났는지 — 놓는 순간 따라오는 click이 그 탭을 활성화하지 않게 한다. */
+let suppressTabClick = false;
+
+/**
+ * 탭을 끌어 순서를 바꾼다. HTML5 drag는 쓰지 않는다 — 파일 드롭(onDragDropEvent) 때문에 Tauri의
+ * dragDropEnabled를 끌 수 없고, 켜져 있으면 webview 안의 HTML5 드래그가 가로채일 수 있다.
+ * move/up은 합성 이벤트로는 포인터 캡처가 실패하므로 setPointerCapture 대신 window에서 받는다.
+ * 끄는 동안은 DOM 순서만 바꾸고, `tabs`·세션은 놓을 때 한 번 맞춘다.
+ */
+function pressTab(button: HTMLElement, event: PointerEvent): void {
+  if (event.button !== 0 || document.querySelector(".modal-backdrop")) return;
+  if ((event.target as HTMLElement).closest(".tab-close")) return;
+  const startX = event.clientX;
+  let dragging = false;
+  const mid = (el: Element) => {
+    const r = el.getBoundingClientRect();
+    return r.left + r.width / 2;
+  };
+  const onMove = (e: PointerEvent) => {
+    if (!dragging) {
+      if (Math.abs(e.clientX - startX) < TAB_DRAG_THRESHOLD) return;
+      dragging = true;
+      button.classList.add("dragging");
+    }
+    // 이웃 탭의 중간선을 넘은 만큼 자리를 바꾼다.
+    for (let p = button.previousElementSibling; p && e.clientX < mid(p); p = button.previousElementSibling) {
+      tabbarEl.insertBefore(button, p);
+    }
+    for (let n = button.nextElementSibling; n && e.clientX > mid(n); n = button.nextElementSibling) {
+      tabbarEl.insertBefore(n, button);
+    }
+  };
+  const onEnd = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onEnd);
+    window.removeEventListener("pointercancel", onEnd);
+    if (!dragging) return;
+    button.classList.remove("dragging");
+    suppressTabClick = true;
+    window.setTimeout(() => (suppressTabClick = false), 0);
+    const order = [...tabbarEl.children];
+    tabs.sort((a, b) => order.indexOf(a.button) - order.indexOf(b.button));
+    persistSession();
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onEnd);
+  window.addEventListener("pointercancel", onEnd);
+}
+
 function createTabButton(path: string): HTMLElement {
   const button = document.createElement("div");
   button.className = "tab";
@@ -593,7 +644,10 @@ function createTabButton(path: string): HTMLElement {
   });
   button.appendChild(close);
 
-  button.addEventListener("click", () => activate(path));
+  button.addEventListener("click", () => {
+    if (!suppressTabClick) activate(path);
+  });
+  button.addEventListener("pointerdown", (event) => pressTab(button, event));
   // 가운데 버튼. × 버튼의 click 핸들러는 button 0만 받으므로 충돌하지 않는다.
   button.addEventListener("auxclick", (event) => {
     if (event.button !== 1) return;
@@ -1023,6 +1077,19 @@ window.addEventListener("DOMContentLoaded", async () => {
       event.preventDefault();
       const tab = activePath ? findTab(activePath) : undefined;
       if (tab && tab.mode !== fkeyMode) setMode(tab, fkeyMode);
+      return;
+    }
+    // ⌥1~⌥8은 N번째 탭, ⌥9는 마지막 탭. ⌘숫자는 편집 전용의 제목 단축키(⌘1~6)라 쓰지 않는다.
+    // macOS에서 ⌥+숫자는 key가 기호('¡' 등)로 오고 한글 입력에서도 다르므로 물리 키(code)로 본다.
+    // 범위 밖 번호도 막는다 — 그렇지 않으면 기호가 입력 영역에 들어간다.
+    const tabDigit =
+      event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey ? /^Digit([1-9])$/.exec(event.code) : null;
+    if (tabDigit) {
+      event.preventDefault();
+      event.stopPropagation();
+      const n = Number(tabDigit[1]);
+      const target = n === 9 ? tabs[tabs.length - 1] : tabs[n - 1];
+      if (target) activate(target.path);
       return;
     }
     if (!(event.metaKey || event.ctrlKey)) return;
