@@ -29,6 +29,31 @@
     localStorage.removeItem("markview.theme.dark");
   } catch {}
 
+  // 세션 복원 하네스용 시드. 이전 페이지가 남긴 세션이 이 페이지의 복원에 새지 않도록 매번 지우고,
+  // 쿼리로 지정한 것만 심는다. ?seedSession=a,b · ?seedActive=b · ?restore=off · ?seedRecent=x,y · ?missing=b
+  const q = new URLSearchParams(location.search);
+  const list = (name) => (q.get(name) ?? "").split(",").filter(Boolean);
+  const missing = new Set(list("missing"));
+  try {
+    localStorage.removeItem("markview.session");
+    localStorage.removeItem("markview.restoreSession");
+    if (q.has("seedSession")) {
+      localStorage.setItem(
+        "markview.session",
+        JSON.stringify({ paths: list("seedSession"), active: q.get("seedActive") }),
+      );
+    }
+    if (q.get("restore") === "off") localStorage.setItem("markview.restoreSession", "false");
+    if (q.has("seedRecent")) localStorage.setItem("markview.recent", JSON.stringify(list("seedRecent")));
+  } catch {}
+  // 세션 쓰기 관측 — 복원 도중에 부분 상태가 기록되지 않는지(S06) 판정한다.
+  window.__SESSION_WRITES__ = [];
+  const nativeSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (key, value) {
+    if (key === "markview.session") window.__SESSION_WRITES__.push(value);
+    return nativeSetItem.call(this, key, value);
+  };
+
   window.__TAURI_INTERNALS__ = {
     metadata: { currentWindow: { label: "main" }, currentWebview: { windowLabel: "main", label: "main" } },
     transformCallback: (cb) => { const id = Math.floor(Math.random() * 1e9); window[`_cb_${id}`] = cb; return id; },
@@ -39,7 +64,10 @@
         args,
         domTheme: document.documentElement.dataset.theme ?? null,
       });
-      if (cmd === "read_markdown") return { ...DOC, path: args?.path ?? DOC.path };
+      if (cmd === "read_markdown") {
+        if (missing.has(args?.path)) throw `파일을 찾을 수 없습니다: ${args.path}`;
+        return { ...DOC, path: args?.path ?? DOC.path };
+      }
       if (cmd === "take_pending_files") return paths;
       // ⌘O의 네이티브 파일 선택창. 하네스가 고른 경로(또는 null=취소)를 window.__PICK_MARKDOWN__에 둔다.
       if (cmd === "pick_markdown") return window.__PICK_MARKDOWN__ ?? null;

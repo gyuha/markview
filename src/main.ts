@@ -9,6 +9,7 @@ import { applyEditorTheme, createEditor } from "./editor";
 import { activeHeading, applyFormat, type FormatId } from "./format";
 import { confirmDialog } from "./modal";
 import { openRecentDialog, recordRecent } from "./recent";
+import { readRestoreSession, readSession, saveSession, type Session } from "./session";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { MuyaEditor, MuyaHost } from "./muya";
@@ -119,6 +120,18 @@ function findTab(path: string): Tab | undefined {
   return tabs.find((t) => t.path === path);
 }
 
+/** 복원 중에는 쓰지 않는다 — 도중에 중단돼도 앞선 세션을 부분 상태로 덮지 않는다. */
+let restoring = false;
+
+/** 열려 있는 탭의 경로·순서와 활성 탭을 기록한다. 탭을 열고 닫고 전환할 때마다 불린다. */
+function persistSession(): void {
+  if (restoring) return;
+  saveSession(
+    tabs.map((t) => t.path),
+    activePath,
+  );
+}
+
 function activate(path: string): void {
   activePath = path;
   for (const tab of tabs) {
@@ -136,6 +149,7 @@ function activate(path: string): void {
   window.DIRNAME = dirname(path);
 
   syncToolbar();
+  persistSession();
 
   // 감춰진 동안 테마가 바뀐 탭은 이 시점에 따라잡는다 (전체 탭을 즉시 재렌더하지 않는 이유).
   const tab = findTab(path);
@@ -529,6 +543,8 @@ function closeTab(path: string): void {
   if (index < 0) return;
   // 마지막 문서를 닫으면 빈 화면을 남기지 않고 창을 닫는다 (Safari·Chrome과 같은 동작).
   if (tabs.length === 1) {
+    // 마지막 탭을 직접 닫은 것이므로 다음 실행에서 복원할 것이 없다.
+    saveSession([], null);
     void getCurrentWindow().close();
     return;
   }
@@ -538,6 +554,7 @@ function closeTab(path: string): void {
   tab.muya?.destroy();
   tab.pane.remove();
   tab.button.remove();
+  persistSession();
   if (activePath !== path) return;
   const next = tabs[index] ?? tabs[index - 1];
   if (next) {
@@ -592,12 +609,18 @@ async function pickAndOpen(): Promise<void> {
   if (path) await openPath(path);
 }
 
-/** 같은 경로가 이미 열려 있으면 새 탭을 만들지 않고 그 탭을 활성화한다. */
-async function openPath(path: string): Promise<void> {
+/**
+ * 같은 경로가 이미 열려 있으면 새 탭을 만들지 않고 그 탭을 활성화한다.
+ * `restore`(세션 복원)는 사용자가 새로 연 것이 아니므로 최근 파일을 건드리지 않고, 못 읽어도 알리지 않는다.
+ */
+async function openPath(path: string, opts: { restore?: boolean } = {}): Promise<void> {
+  const record = (p: string) => {
+    if (!opts.restore) recordRecent(p);
+  };
   const existing = findTab(path);
   if (existing) {
     activate(existing.path);
-    recordRecent(existing.path);
+    record(existing.path);
     return;
   }
 
@@ -605,13 +628,13 @@ async function openPath(path: string): Promise<void> {
   try {
     doc = await invoke<Doc>("read_markdown", { path });
   } catch (e) {
-    notify(String(e));
+    if (!opts.restore) notify(String(e));
     return;
   }
 
   if (findTab(doc.path)) {
     activate(doc.path);
-    recordRecent(doc.path);
+    record(doc.path);
     return;
   }
 
@@ -666,7 +689,7 @@ async function openPath(path: string): Promise<void> {
   tabs.push(tab);
   installScrollSync(tab);
   activate(doc.path);
-  recordRecent(doc.path);
+  record(doc.path);
   await paintMermaid(tab);
 }
 
@@ -1053,7 +1076,11 @@ window.addEventListener("DOMContentLoaded", async () => {
   // OS 파일 연결로 넘어온 경로. Rust 버퍼가 단일 출처이므로 시작 시 한 번 비우고,
   // 실행 중에 새로 열리면 알림을 받아 다시 비운다 — 비우는 방식이라 중복 열기가 없다.
   await listen("files-opened", () => void drainPendingFiles());
-  await drainPendingFiles();
+  // 요청된 파일을 먼저 열면 세션이 그 목록으로 덮이므로, 지난 세션은 열기 전에 읽어 둔다.
+  const lastSession = readSession();
+  const requested = await drainPendingFiles();
+  // 요청 없이 시작했을 때만 지난 세션을 되살린다 — 요청된 파일이 있으면 그 파일만 연다.
+  if (requested.length === 0 && readRestoreSession()) await restoreSession(lastSession);
 
   // ⌘W는 메뉴를 거쳐 온다(가속기가 메뉴에 묶여 있어 keydown으로는 오지 않는다).
   await listen("close-tab", () => {
@@ -1102,9 +1129,26 @@ async function requestCloseWindow(): Promise<void> {
   await getCurrentWindow().close();
 }
 
-async function drainPendingFiles(): Promise<void> {
+async function drainPendingFiles(): Promise<string[]> {
   const paths = await invoke<string[]>("take_pending_files");
   for (const path of paths) {
     await openPath(path);
   }
+  return paths;
+}
+
+/**
+ * 지난 세션의 탭을 저장된 순서대로 열고 활성 탭을 맞춘다. 못 여는 파일은 조용히 건너뛴다.
+ * 복원 도중에는 세션을 쓰지 않고, 끝난 뒤 지금 열린 탭으로 한 번 기록한다.
+ */
+async function restoreSession({ paths, active }: Session): Promise<void> {
+  if (paths.length === 0) return;
+  restoring = true;
+  try {
+    for (const path of paths) await openPath(path, { restore: true });
+    if (active && findTab(active)) activate(active);
+  } finally {
+    restoring = false;
+  }
+  persistSession();
 }

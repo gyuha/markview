@@ -1165,6 +1165,87 @@ html[data-theme] .mu-editor .token.deleted {
   background: var(--code-bg);
 }
 
+.settings-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 0 0 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-tab {
+  padding: 0.35rem 0.9rem;
+  margin-bottom: -1px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  cursor: default;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+}
+
+.settings-tab.active {
+  color: var(--fg);
+  border-bottom-color: var(--link);
+}
+
+/* 탭마다 내용 길이가 달라도 다이얼로그 높이가 출렁이지 않도록 모양 패널 높이에 맞춘다. */
+.settings-panel {
+  min-height: 21.25rem;
+}
+
+.settings-panel[hidden] {
+  display: none;
+}
+
+.settings-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.85rem;
+}
+
+.settings-switch-hint {
+  margin-top: 0.15rem;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+
+.settings-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 20px;
+  padding: 0;
+  cursor: default;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.settings-switch::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  content: "";
+  background: var(--fg-muted);
+  border-radius: 50%;
+  transition: transform 0.12s;
+}
+
+.settings-switch[aria-checked="true"] {
+  background: var(--link);
+  border-color: var(--link);
+}
+
+.settings-switch[aria-checked="true"]::after {
+  background: #fff;
+  transform: translateX(14px);
+}
+
 .cs-row {
   display: flex;
   align-items: center;
