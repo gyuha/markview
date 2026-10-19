@@ -11,62 +11,46 @@ import {
   lineNumbers,
 } from "@codemirror/view";
 import { formatCommand } from "./format";
-import type { Effective } from "./theme";
+import type { Palette } from "./theme";
 
 /** 테마만 바꿔 끼울 수 있도록 격리한다 — 문서와 커서를 잃지 않고 교체된다. */
 const themeCompartment = new Compartment();
 
-/**
- * 마크다운 문법 강조. 색은 문서 프리뷰의 highlight.js 테마와 같은 계열(github light/dark)로 맞춘다.
- * 기본 highlight style은 라이트 색이 고정이라 다크에서 읽히지 않으므로 두 벌을 둔다.
- */
-function highlightStyle(effective: Effective): HighlightStyle {
-  const dark = effective === "dark";
+/** 마크다운 문법 강조. 색은 팔레트 변수에서 가져와 프리뷰·Muya와 같은 색상 테마를 따른다. */
+function highlightStyle(palette: Palette): HighlightStyle {
+  const v = palette.vars;
   return HighlightStyle.define([
-    { tag: tags.heading, color: dark ? "#79c0ff" : "#0550ae", fontWeight: "600" },
-    { tag: tags.strong, color: dark ? "#e6edf3" : "#1f2328", fontWeight: "600" },
+    { tag: tags.heading, color: v["--tok-func"], fontWeight: "600" },
+    { tag: tags.strong, color: v["--fg"], fontWeight: "600" },
     { tag: tags.emphasis, fontStyle: "italic" },
     { tag: tags.strikethrough, textDecoration: "line-through" },
-    { tag: tags.link, color: dark ? "#4493f8" : "#0969da" },
-    { tag: tags.url, color: dark ? "#4493f8" : "#0969da" },
-    { tag: tags.monospace, color: dark ? "#a5d6ff" : "#0a3069" },
-    { tag: tags.quote, color: dark ? "#9198a1" : "#59636e" },
+    { tag: tags.link, color: v["--link"] },
+    { tag: tags.url, color: v["--link"] },
+    { tag: tags.monospace, color: v["--tok-string"] },
+    { tag: tags.quote, color: v["--fg-muted"] },
     // `#`, `*`, 백틱 같은 문법 기호와 `---` 구분선
-    { tag: tags.processingInstruction, color: dark ? "#9198a1" : "#59636e" },
-    { tag: tags.contentSeparator, color: dark ? "#9198a1" : "#59636e" },
-    { tag: tags.meta, color: dark ? "#9198a1" : "#59636e" },
+    { tag: tags.processingInstruction, color: v["--fg-muted"] },
+    { tag: tags.contentSeparator, color: v["--fg-muted"] },
+    { tag: tags.meta, color: v["--fg-muted"] },
   ]);
 }
 
-/** 색은 앱 팔레트와 같은 값을 쓴다. CSS 변수는 CM6 테마 객체에서 읽히지 않아 직접 적는다. */
-function editorTheme(effective: Effective) {
-  const dark = effective === "dark";
+/** CSS 변수는 CM6 테마 객체에서 읽히지 않아 팔레트의 값을 직접 적는다. */
+function editorTheme(palette: Palette) {
+  const v = palette.vars;
   return EditorView.theme(
     {
-      "&": {
-        color: dark ? "#e6edf3" : "#1f2328",
-        backgroundColor: dark ? "#0d1117" : "#ffffff",
-      },
-      ".cm-content": { caretColor: dark ? "#e6edf3" : "#1f2328" },
-      ".cm-cursor, .cm-dropCursor": {
-        borderLeftColor: dark ? "#e6edf3" : "#1f2328",
-      },
-      ".cm-gutters": {
-        color: dark ? "#9198a1" : "#59636e",
-        backgroundColor: dark ? "#151b23" : "#f6f8fa",
-        border: "none",
-      },
-      ".cm-activeLine": {
-        backgroundColor: dark ? "#151b23" : "#f6f8fa",
-      },
-      ".cm-activeLineGutter": {
-        backgroundColor: dark ? "#1c232c" : "#eaeef2",
-      },
+      "&": { color: v["--fg"], backgroundColor: v["--bg"] },
+      ".cm-content": { caretColor: v["--fg"] },
+      ".cm-cursor, .cm-dropCursor": { borderLeftColor: v["--fg"] },
+      ".cm-gutters": { color: v["--fg-muted"], backgroundColor: v["--code-bg"], border: "none" },
+      ".cm-activeLine": { backgroundColor: v["--code-bg"] },
+      ".cm-activeLineGutter": { backgroundColor: v["--editor-color-10"] },
       "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
-        backgroundColor: dark ? "#1f3b5c" : "#dbe9f8",
+        backgroundColor: v["--selection-color"],
       },
     },
-    { dark },
+    { dark: palette.kind === "dark" },
   );
 }
 
@@ -77,7 +61,7 @@ function editorTheme(effective: Effective) {
 export function createEditor(
   host: HTMLElement,
   source: string,
-  effective: Effective,
+  palette: Palette,
   onChange: (next: string) => void,
 ): EditorView {
   return new EditorView({
@@ -101,8 +85,8 @@ export function createEditor(
         EditorView.lineWrapping,
         markdown(),
         themeCompartment.of([
-          editorTheme(effective),
-          syntaxHighlighting(highlightStyle(effective)),
+          editorTheme(palette),
+          syntaxHighlighting(highlightStyle(palette)),
         ]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) onChange(update.state.doc.toString());
@@ -113,11 +97,11 @@ export function createEditor(
 }
 
 /** 테마 5번째 겹. 문서를 유지한 채 테마 확장만 교체한다. */
-export function applyEditorTheme(view: EditorView, effective: Effective): void {
+export function applyEditorTheme(view: EditorView, palette: Palette): void {
   view.dispatch({
     effects: themeCompartment.reconfigure([
-      editorTheme(effective),
-      syntaxHighlighting(highlightStyle(effective)),
+      editorTheme(palette),
+      syntaxHighlighting(highlightStyle(palette)),
     ]),
   });
 }

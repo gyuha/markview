@@ -13,6 +13,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { MuyaEditor, MuyaHost } from "./muya";
 import { renderMermaid } from "./mermaid";
+import { openSettings } from "./settings";
 import { dirname, isExternalHref, renderInto, resolvePath } from "./render";
 import {
   applyChrome,
@@ -22,7 +23,9 @@ import {
   readChoice,
   saveChoice,
   type Choice,
+  paletteFor,
   type Effective,
+  type Palette,
 } from "./theme";
 
 interface Doc {
@@ -48,7 +51,8 @@ interface Tab {
   body: HTMLElement;
   button: HTMLElement;
   /** 이 탭의 mermaid를 마지막으로 그린 실효 테마. 현재 테마와 다르면 활성화될 때 다시 그린다. */
-  renderedTheme: Effective | null;
+  /** 마지막으로 mermaid를 그린 팔레트의 id. */
+  renderedTheme: string | null;
   mode: Mode;
   editorHost: HTMLElement;
   /** 분할 모드가 처음 필요할 때 만든다 — 뷰어로만 쓰는 탭은 CM6를 만들지 않는다. */
@@ -80,6 +84,7 @@ const tabs: Tab[] = [];
 let activePath: string | null = null;
 let choice: Choice = "system";
 let effective: Effective = "light";
+let palette: Palette = paletteFor("light");
 const themeButtons = new Map<Choice, HTMLElement>();
 const modeButtons = new Map<Mode, HTMLElement>();
 /** 수정자 없는 F키 → 보기 모드. 메뉴에 F키 가속기가 없어 keydown으로 잡힌다. */
@@ -134,7 +139,7 @@ function activate(path: string): void {
 
   // 감춰진 동안 테마가 바뀐 탭은 이 시점에 따라잡는다 (전체 탭을 즉시 재렌더하지 않는 이유).
   const tab = findTab(path);
-  if (tab && tab.renderedTheme !== effective) {
+  if (tab && tab.renderedTheme !== palette.id) {
     void paintMermaid(tab);
   }
 }
@@ -218,7 +223,7 @@ function applyMode(tab: Tab): void {
 
   if (tab.mode === "split") {
     if (!tab.editor) {
-      tab.editor = createEditor(tab.editorHost, tab.source, effective, (next) => {
+      tab.editor = createEditor(tab.editorHost, tab.source, palette, (next) => {
         if (syncingEditor) return;
         tab.source = next;
         markDirty(tab, true);
@@ -479,8 +484,8 @@ function attachEditorScrollSync(tab: Tab): void {
 }
 
 async function paintMermaid(tab: Tab): Promise<void> {
-  tab.renderedTheme = effective;
-  await renderMermaid(tab.body, effective);
+  tab.renderedTheme = palette.id;
+  await renderMermaid(tab.body, palette);
 }
 
 /**
@@ -490,10 +495,11 @@ async function paintMermaid(tab: Tab): Promise<void> {
 async function applyTheme(): Promise<void> {
   await applyNativeTheme(choice);
   effective = effectiveOf(choice);
-  applyChrome(effective);
+  palette = paletteFor(effective);
+  applyChrome(palette);
   // 다섯 번째 겹: 열려 있는 모든 에디터. CM6는 문서를 유지한 채 테마만 교체된다.
   for (const tab of tabs) {
-    if (tab.editor) applyEditorTheme(tab.editor, effective);
+    if (tab.editor) applyEditorTheme(tab.editor, palette);
   }
   // Muya는 색을 CSS 변수(styles.css)로 따라가고, 다이어그램 테마만 옵션으로 바꾼다.
   if (tabs.some((t) => t.muya)) {
@@ -701,18 +707,31 @@ function installThemeControl(): void {
   for (const button of document.querySelectorAll<HTMLElement>("#theme [data-choice]")) {
     const value = button.dataset.choice as Choice;
     themeButtons.set(value, button);
-    button.addEventListener("click", () => {
-      if (choice === value) return;
-      choice = value;
-      saveChoice(choice);
-      syncThemeControl();
-      void applyTheme();
-    });
+    button.addEventListener("click", () => selectChoice(value));
   }
+
+  document.querySelector<HTMLElement>("#settings-button")?.addEventListener("click", showSettings);
 
   choice = readChoice();
   syncThemeControl();
   void applyTheme();
+}
+
+/** 툴바와 설정 대화상자가 같이 쓰는 모드 변경 경로 — 한 곳이라 둘이 어긋나지 않는다. */
+function selectChoice(value: Choice): void {
+  if (choice === value) return;
+  choice = value;
+  saveChoice(choice);
+  syncThemeControl();
+  void applyTheme();
+}
+
+function showSettings(): void {
+  openSettings({
+    getChoice: () => choice,
+    setChoice: selectChoice,
+    onColorThemeChange: () => void applyTheme(),
+  });
 }
 
 /** 보기 모드 세그먼트를 배선한다. 모드는 탭별이므로 활성 탭에만 적용된다. */
@@ -1037,6 +1056,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   // ⌘S는 메뉴 가속기다 — macOS는 메뉴 키 등가물을 webview보다 먼저 처리하므로
   // keydown으로 잡으려 해도 오지 않는다(⌘W와 같은 이유).
   await listen("save", () => void saveActive());
+  await listen("open-settings", showSettings);
   // ⇧⌘V(메뉴) — Rust가 읽은 클립보드 글자. 편집 전용은 MarkText의 일반 텍스트 붙여넣기, 분할은 CM에 그대로 넣는다.
   await listen<string>("paste-as-plaintext", (event) => {
     const tab = activePath ? findTab(activePath) : undefined;

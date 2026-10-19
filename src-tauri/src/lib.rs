@@ -272,6 +272,8 @@ fn build_menu(handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         &[
             &PredefinedMenuItem::about(handle, None, Some(AboutMetadata::default()))?,
             &PredefinedMenuItem::separator(handle)?,
+            &MenuItem::with_id(handle, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
+            &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::hide(handle, None)?,
             &PredefinedMenuItem::hide_others(handle, None)?,
             &PredefinedMenuItem::show_all(handle, None)?,
@@ -369,6 +371,9 @@ pub fn run() {
             match event.id().as_ref() {
                 "save" => {
                     let _ = handle.emit("save", ());
+                }
+                "settings" => {
+                    let _ = handle.emit("open-settings", ());
                 }
                 "close-tab" => {
                     let _ = handle.emit("close-tab", ());

@@ -280,6 +280,35 @@ html .editor-host ::selection {
   stroke-linejoin: round;
 }
 
+.settings-button {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--fg-muted);
+  cursor: default;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.settings-button:hover {
+  color: var(--fg);
+}
+
+.settings-button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .tab {
   display: flex;
   align-items: center;
@@ -594,60 +623,66 @@ html[data-theme="dark"] {
   --float-shadow: rgb(1 4 9 / 60%) 0 0 0 1px, rgb(1 4 9 / 50%) 0 8px 24px;
 }
 
-/* Muya에는 Prism 라이트 테마만 있다 — 다크에서는 프리뷰(github-dark)와 같은 계열로 덮는다. */
-html[data-theme="dark"] .mu-editor .token.comment,
-html[data-theme="dark"] .mu-editor .token.prolog,
-html[data-theme="dark"] .mu-editor .token.doctype,
-html[data-theme="dark"] .mu-editor .token.cdata,
-html[data-theme="dark"] .mu-editor .token.punctuation {
-  color: #9198a1;
+/*
+ * Muya의 Prism 토큰 색은 라이트 하나뿐이라 둘 다 색상 테마의 --tok-* 변수로 덮는다.
+ * 프리뷰(highlight.js)·CodeMirror와 같은 변수를 읽으므로 세 곳의 색이 어긋나지 않는다.
+ */
+html[data-theme] .mu-editor .token.comment,
+html[data-theme] .mu-editor .token.prolog,
+html[data-theme] .mu-editor .token.doctype,
+html[data-theme] .mu-editor .token.cdata,
+html[data-theme] .mu-editor .token.punctuation {
+  color: var(--tok-comment);
 }
 
-html[data-theme="dark"] .mu-editor .token.property,
-html[data-theme="dark"] .mu-editor .token.tag,
-html[data-theme="dark"] .mu-editor .token.boolean,
-html[data-theme="dark"] .mu-editor .token.number,
-html[data-theme="dark"] .mu-editor .token.constant,
-html[data-theme="dark"] .mu-editor .token.symbol,
-html[data-theme="dark"] .mu-editor .token.operator,
-html[data-theme="dark"] .mu-editor .token.entity,
-html[data-theme="dark"] .mu-editor .token.url {
-  color: #79c0ff;
+html[data-theme] .mu-editor .token.boolean,
+html[data-theme] .mu-editor .token.number,
+html[data-theme] .mu-editor .token.constant,
+html[data-theme] .mu-editor .token.symbol {
+  color: var(--tok-number);
 }
 
-html[data-theme="dark"] .mu-editor .token.selector,
-html[data-theme="dark"] .mu-editor .token.attr-name,
-html[data-theme="dark"] .mu-editor .token.string,
-html[data-theme="dark"] .mu-editor .token.char,
-html[data-theme="dark"] .mu-editor .token.builtin {
-  color: #a5d6ff;
+html[data-theme] .mu-editor .token.operator,
+html[data-theme] .mu-editor .token.entity,
+html[data-theme] .mu-editor .token.url,
+html[data-theme] .mu-editor .token.selector,
+html[data-theme] .mu-editor .token.attr-name,
+html[data-theme] .mu-editor .token.builtin {
+  color: var(--tok-type);
 }
 
-html[data-theme="dark"] .mu-editor .token.atrule,
-html[data-theme="dark"] .mu-editor .token.attr-value,
-html[data-theme="dark"] .mu-editor .token.keyword {
-  color: #ff7b72;
+html[data-theme] .mu-editor .token.string,
+html[data-theme] .mu-editor .token.char {
+  color: var(--tok-string);
 }
 
-html[data-theme="dark"] .mu-editor .token.function,
-html[data-theme="dark"] .mu-editor .token.class-name {
-  color: #d2a8ff;
+html[data-theme] .mu-editor .token.atrule,
+html[data-theme] .mu-editor .token.attr-value,
+html[data-theme] .mu-editor .token.keyword {
+  color: var(--tok-keyword);
 }
 
-html[data-theme="dark"] .mu-editor .token.regex,
-html[data-theme="dark"] .mu-editor .token.important,
-html[data-theme="dark"] .mu-editor .token.variable {
-  color: #ffa657;
+html[data-theme] .mu-editor .token.function,
+html[data-theme] .mu-editor .token.class-name {
+  color: var(--tok-func);
 }
 
-html[data-theme="dark"] .mu-editor .token.inserted {
-  color: #aff5b4;
-  background: #033a16;
+html[data-theme] .mu-editor .token.property,
+html[data-theme] .mu-editor .token.tag,
+html[data-theme] .mu-editor .token.regex,
+html[data-theme] .mu-editor .token.important,
+html[data-theme] .mu-editor .token.variable {
+  color: var(--tok-var);
 }
 
-html[data-theme="dark"] .mu-editor .token.deleted {
-  color: #ffdcd7;
-  background: #67060c;
+html[data-theme] .mu-editor .token.inserted {
+  color: var(--tok-string);
+  background: var(--tok-added-bg);
+}
+
+html[data-theme] .mu-editor .token.deleted {
+  color: var(--tok-var);
+  background: var(--tok-removed-bg);
 }
 
 /* CodeMirror가 페인 높이를 채우게 한다. */
@@ -1049,4 +1084,196 @@ html[data-theme="dark"] .mu-editor .token.deleted {
   margin: 0.4rem 0.55rem;
   font-size: 0.85rem;
   color: var(--fg-muted);
+}
+
+/* 설정 대화상자 */
+.settings {
+  width: min(30rem, 92vw);
+  max-width: none;
+}
+
+.settings-title {
+  margin: 0 0 0.8rem;
+  font-size: 1rem;
+}
+
+.settings-heading {
+  margin: 0.9rem 0 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.settings-modes {
+  display: flex;
+  gap: 2px;
+  width: fit-content;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.settings-mode {
+  padding: 0.25rem 0.8rem;
+  font-family: inherit;
+  font-size: 0.82rem;
+  color: var(--fg-muted);
+  cursor: default;
+  background: none;
+  border: none;
+  border-radius: 5px;
+}
+
+.settings-mode.active {
+  color: var(--fg);
+  background: var(--code-bg);
+}
+
+.cs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+}
+
+.cs {
+  position: relative;
+  flex: 0 0 15rem;
+}
+
+.cs-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  font: inherit;
+  color: var(--fg);
+  text-align: left;
+  cursor: default;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.cs-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cs-caret {
+  color: var(--fg-muted);
+}
+
+.cs-swatch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.cs-swatch i {
+  width: 9px;
+  height: 14px;
+}
+
+.cs-list {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+  left: 0;
+  z-index: 2;
+  max-height: 14rem;
+  margin: 0;
+  padding: 3px;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 20px rgb(0 0 0 / 25%);
+}
+
+.cs-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.4rem;
+  cursor: default;
+  border-radius: 4px;
+}
+
+.cs-option:hover,
+.cs-option:focus-visible {
+  background: var(--code-bg);
+  outline: none;
+}
+
+.cs-option[aria-selected="true"]::after {
+  margin-left: auto;
+  color: var(--link);
+  content: "✓";
+}
+
+.settings-preview {
+  margin: 0.2rem 0 0.9rem;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.82rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.sp-title {
+  margin-bottom: 0.3rem;
+  font-weight: 600;
+}
+
+.sp-body {
+  margin: 0 0 0.4rem;
+  color: var(--fg-muted);
+}
+
+.sp-link {
+  color: var(--link);
+}
+
+.sp-body code {
+  padding: 0 0.3em;
+  background: var(--code-bg);
+  border-radius: 4px;
+}
+
+.sp-code {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--code-bg);
+  border-radius: 6px;
+}
+
+.sp-k {
+  color: var(--tok-keyword);
+}
+
+.sp-n {
+  color: var(--tok-number);
+}
+
+.sp-f {
+  color: var(--tok-func);
+}
+
+.sp-s {
+  color: var(--tok-string);
+}
+
+.sp-c {
+  color: var(--tok-comment);
 }

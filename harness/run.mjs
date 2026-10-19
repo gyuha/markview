@@ -2,6 +2,7 @@
 // 하네스 페이지를 Chromium과 WebKit(Tauri가 macOS에서 쓰는 WKWebView와 같은 엔진 계열)에서 연다.
 //
 //   node harness/run.mjs regression   기존 하네스 출력이 harness/golden/regression.txt와 바이트 단위로 같은가
+//   node harness/run.mjs colortheme   harness/colortheme.ts(색상 테마·설정 다이얼로그)가 두 엔진 모두 FAIL 0개인가
 //   node harness/run.mjs muya         harness/muya-*.ts 전부에서 harness/required-muya.txt의 ID가
 //                                     두 엔진 모두 PASS이고 FAIL이 0개인가
 //
@@ -185,10 +186,28 @@ async function recent() {
   return bad === 0 ? 0 : 1;
 }
 
+// 색상 테마·설정 다이얼로그 하네스. 끝나면 마지막 줄에 DONE을 쓰고, FAIL 줄이 하나도 없어야 통과다.
+async function colortheme() {
+  generate(["colortheme"]);
+  const results = await withServer((base) =>
+    runSpecs(base, ["colortheme.html?mermaid=1"], {
+      until: (t) => /(^|\n)DONE\s*$/.test(t),
+      timeoutMs: 90000,
+    }),
+  );
+  let bad = 0;
+  for (const r of results) {
+    console.log(`=== ${r.engine} ${r.spec}${r.timedOut ? "  (시간 초과 — DONE 없음)" : ""}\n${r.txt}`);
+    bad += (r.timedOut ? 1 : 0) + r.txt.split("\n").filter((l) => /^FAIL\b/.test(l)).length;
+  }
+  console.log(bad === 0 ? "PASS  색상 테마 하네스 전부 통과" : `FAIL  색상 테마 하네스 문제 ${bad}건`);
+  return bad === 0 ? 0 : 1;
+}
+
 const mode = process.argv[2];
-const modes = { regression, muya, recent };
+const modes = { regression, muya, recent, colortheme };
 if (!modes[mode]) {
-  console.error("사용법: node harness/run.mjs <regression|muya|recent>");
+  console.error("사용법: node harness/run.mjs <regression|muya|recent|colortheme>");
   process.exit(64);
 }
 process.exit(await modes[mode]());

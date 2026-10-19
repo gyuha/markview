@@ -1,9 +1,9 @@
-import type { Effective } from "./theme";
+import type { Palette } from "./theme";
 
 type MermaidApi = Awaited<typeof import("mermaid")>["default"];
 
 let mermaidApi: MermaidApi | null = null;
-let initializedFor: Effective | null = null;
+let initializedFor: string | null = null;
 let idSeq = 0;
 
 /**
@@ -14,20 +14,21 @@ let idSeq = 0;
 const svgCache = new Map<string, string>();
 
 /** 번들을 실제로 mermaid가 필요한 순간까지 미룬다. */
-async function load(theme: Effective): Promise<MermaidApi> {
+async function load(palette: Palette): Promise<MermaidApi> {
   if (!mermaidApi) {
     mermaidApi = (await import("mermaid")).default;
   }
-  if (initializedFor !== theme) {
+  if (initializedFor !== palette.id) {
     mermaidApi.initialize({
       startOnLoad: false,
       securityLevel: "strict",
       // 이게 없으면 파싱 실패 시 mermaid가 "Syntax error" 폭탄 그래픽을 document.body에
       // 직접 붙이고, 테마를 전환할 때마다 하나씩 누적된다.
       suppressErrorRendering: true,
-      theme: theme === "dark" ? "dark" : "default",
+      theme: "base",
+      themeVariables: palette.mermaid,
     });
-    initializedFor = theme;
+    initializedFor = palette.id;
   }
   return mermaidApi;
 }
@@ -36,15 +37,15 @@ async function load(theme: Effective): Promise<MermaidApi> {
  * 컨테이너 안의 mermaid 자리표시자를 전수 렌더한다.
  * 원문은 `data-mermaid`에 남아 있으므로 테마가 바뀌면 몇 번이든 다시 그릴 수 있다.
  */
-export async function renderMermaid(scope: HTMLElement, theme: Effective): Promise<void> {
+export async function renderMermaid(scope: HTMLElement, palette: Palette): Promise<void> {
   const blocks = Array.from(scope.querySelectorAll<HTMLElement>(".mermaid-block"));
   if (blocks.length === 0) return;
 
-  const mermaid = await load(theme);
+  const mermaid = await load(palette);
 
   for (const block of blocks) {
     const source = block.dataset.mermaid ?? "";
-    const cacheKey = `${theme}\n${source}`;
+    const cacheKey = `${palette.id}\n${source}`;
     const cached = svgCache.get(cacheKey);
     if (cached !== undefined) {
       block.classList.remove("mermaid-failed");

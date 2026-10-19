@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "test:format": "node harness/format.ts",
     "test:scripts": "node --test scripts/*.test.mjs",
+    "gen-themes": "node scripts/gen-themes.mjs",
     "release": "bash scripts/release.sh publish",
     "harness": "node harness/build-mocked.mjs",
     "tauri": "tauri"

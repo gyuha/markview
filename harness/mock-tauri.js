@@ -1,5 +1,11 @@
 (() => {
-  const DOC = { path: "/tmp/harness.md", text: "제목\n\n본문 한 줄\n", mtime_ms: 1 };
+  // ?mermaid=1 이면 mermaid 블록이 든 문서를 연다. 기본은 기존 하네스가 기대하는 문서 그대로다.
+  const withMermaid = new URLSearchParams(location.search).get("mermaid") === "1";
+  const DOC = {
+    path: "/tmp/harness.md",
+    text: withMermaid ? "제목\n\n```mermaid\ngraph TD; A-->B;\n```\n" : "제목\n\n본문 한 줄\n",
+    mtime_ms: 1,
+  };
   // ?files=N 으로 탭 여러 개를 열 수 있다. 기본 1이라 기존 하네스는 영향받지 않는다.
   const fileCount = Number(new URLSearchParams(location.search).get("files") ?? 1);
   // ?files=0 이면 시작 시 아무 파일도 열리지 않는다(기록 없는 첫 실행 재현).
@@ -19,6 +25,8 @@
   // 이전 하네스가 남긴 선택 테마 때문에 결과가 흔들리지 않도록 기준 상태로 되돌린다.
   try {
     localStorage.removeItem("markview.theme");
+    localStorage.removeItem("markview.theme.light");
+    localStorage.removeItem("markview.theme.dark");
   } catch {}
 
   window.__TAURI_INTERNALS__ = {

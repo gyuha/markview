@@ -2,10 +2,17 @@
 // `pnpm dev` 후 http://localhost:1420/harness/keymap.html 를 열고 #out 을 읽는다.
 import { EditorSelection } from "@codemirror/state";
 import { createEditor } from "../src/editor";
+import { deriveColors } from "../src/themeColors";
+import { COLOR_THEMES } from "../src/themes.generated";
 
 const host = document.createElement("div");
 document.body.appendChild(host);
-const view = createEditor(host, "굵게 기울임", "light", () => {});
+const view = createEditor(
+  host,
+  "굵게 기울임",
+  deriveColors(COLOR_THEMES.find((t) => t.id === "github-light")!),
+  () => {},
+);
 
 const out = document.createElement("pre");
 out.id = "out";
