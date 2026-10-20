@@ -1,7 +1,7 @@
 // 다중 창·탭 분리 — W01~W04는 순수 판정(dropAction), W05~W14는 이후 슬라이스에서 채운다.
 // `node harness/run.mjs windows` 가 ?files=3 페이지로 돌린다.
 import { check, guard, tabs, wait } from "./lib-muya";
-import { dropAction } from "../src/tabDetach";
+import { dropAction, insertIndex } from "../src/tabDetach";
 
 const TH = 40;
 const bar = { left: 0, right: 800, top: 0, bottom: 36 };
@@ -165,6 +165,62 @@ async function main(): Promise<void> {
   await storage("markview.recent", JSON.stringify(["/tmp/x.md"]));
   const stable = root.style.getPropertyValue("--doc-width") === wide && root.dataset.theme === "dark";
   check("W13", "`storage` 이벤트(문서 너비 키)가 오면 `--doc-width`가 바뀐다", wide === "64rem" && stable, `width=${wide} stable=${stable}`);
+
+  // W15·W16 — 병합 삽입 인덱스는 탭 중심선 기준이다(순수 판정). 빈 탭바면 0.
+  const rects = [0, 100, 200].map((left) => ({ left, right: left + 100 }));
+  const idx = [insertIndex(10, rects), insertIndex(49, rects), insertIndex(51, rects), insertIndex(149, rects), insertIndex(151, rects), insertIndex(251, rects), insertIndex(999, rects)];
+  check("W15", "`insertIndex(화면 x, 탭 사각형들)`가 탭 중심선 기준으로 앞·가운데·맨 끝 인덱스를 낸다", JSON.stringify(idx) === JSON.stringify([0, 0, 1, 1, 2, 3, 3]), `idx=${JSON.stringify(idx)}`);
+  check("W16", "탭이 하나도 없는 창에 병합하면 인덱스 0이다", insertIndex(123, []) === 0 && insertIndex(-50, []) === 0, `idx=${insertIndex(123, [])}`);
+
+  // W17 — merge-in을 받으면 계산된 인덱스에 열어 활성화하고 세션을 갱신한다. 소유는 Rust가 이미 옮겼으므로 claim_file을 다시 부르지 않는다
+  const MERGED = "/tmp/harness-merged.md";
+  const rs = [...document.querySelectorAll("#tabbar .tab")].map((b) => b.getBoundingClientRect());
+  const mid0 = window.screenX + rs[0].left + rs[0].width / 2;
+  const mid1 = window.screenX + rs[1].left + rs[1].width / 2;
+  const n17 = mc().length;
+  (window as unknown as { __emitTauri: (e: string, p: unknown) => void }).__emitTauri("merge-in", { path: MERGED, screen_x: (mid0 + mid1) / 2 });
+  for (let i = 0; i < 50 && !tabs().some((t) => t.path === MERGED); i++) await wait(60);
+  await wait(100);
+  const after17 = mc().slice(n17);
+  const dom17 = domPaths();
+  const active17 = document.querySelector("#tabbar .tab.active")?.getAttribute("title");
+  const claims17 = after17.filter((c) => c.cmd === "claim_file").length;
+  check("W17", "`merge-in` 이벤트를 받으면 그 경로가 계산된 인덱스에 삽입되고 활성화되며 세션이 갱신된다", dom17[1] === MERGED && JSON.stringify(tabs().map((t) => t.path)) === JSON.stringify(dom17) && active17 === MERGED && claims17 === 0 && lastSession()?.[1] === MERGED, `dom=${JSON.stringify(dom17)} active=${active17} claims=${claims17} session=${JSON.stringify(lastSession())}`);
+
+  // W18~W20 — detach_tab 응답이 merged여도 detached여도 원 탭은 확인 없이 닫히고, 미저장 확인은 호출 전에 거친다.
+  // 마지막 탭이면 closeTab이 창을 닫는다(plugin:window|close).
+  const wr = window as unknown as { __DETACH_RESULT__: string; __DETACH_FAIL__: boolean };
+  wr.__DETACH_FAIL__ = false;
+  const dropFar = (path: string) => drag(buttonOf(path), [[centerX(buttonOf(path)) + 10, farY()]]);
+  const closes = () => calls().filter((c) => c.cmd === "plugin:window|close").length;
+  const dropOutcome = async (result: string) => {
+    wr.__DETACH_RESULT__ = result;
+    const target = tabs().at(-1)!.path;
+    const before = tabs().length;
+    const nd = cmds("detach_tab").length;
+    dropFar(target);
+    await wait(200);
+    return { target, called: cmds("detach_tab").length - nd, gone: tabs().length === before - 1 && !tabs().some((t) => t.path === target) && !domPaths().includes(target), modal: !!modal(".modal-backdrop") };
+  };
+  const merged = await dropOutcome("merged");
+  const detached = await dropOutcome("detached");
+  check("W19", "`detach_tab`이 새 창으로 끝나면(`detached`) part 1 동작과 같다", detached.called === 1 && detached.gone && !detached.modal && closes() === 0, `${JSON.stringify(detached)} closes=${closes()}`);
+  wr.__DETACH_RESULT__ = "merged";
+  const dirtyPath = tabs().at(-1)!.path;
+  tabOf(dirtyPath).dirty = true;
+  const n20 = cmds("detach_tab").length;
+  const w20 = tabs().length;
+  dropFar(dirtyPath);
+  const asked = !!modal(".modal-backdrop") && modal(".modal-confirm")?.textContent === "저장하고 옮기기";
+  const calledAtAsk = cmds("detach_tab").length - n20;
+  modal(".modal-cancel")?.click();
+  await wait(150);
+  check("W20", "미저장 탭이 병합 경로에서도 확인창을 먼저 거치고 취소하면 `detach_tab`이 불리지 않는다", asked && calledAtAsk === 0 && cmds("detach_tab").length === n20 && tabs().length === w20 && !modal(".modal-backdrop"), `asked=${asked} calledAtAsk=${calledAtAsk} tabs=${tabs().length}/${w20}`);
+  tabOf(dirtyPath).dirty = false;
+  while (tabs().length > 1) await dropOutcome("merged");
+  const lastBefore = closes();
+  const last = await dropOutcome("merged");
+  check("W18", "`detach_tab`이 병합으로 끝나면(모킹 응답 `merged`) 원래 창에서 탭이 확인 없이 닫히고, 마지막 탭이면 창이 닫힌다", merged.called === 1 && merged.gone && !merged.modal && last.called === 1 && !last.modal && closes() === lastBefore + 1, `merged=${JSON.stringify(merged)} last=${JSON.stringify(last)} closes=${lastBefore}->${closes()}`);
 }
 
 void guard(main);

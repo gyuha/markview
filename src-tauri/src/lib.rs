@@ -9,7 +9,8 @@ use std::sync::Mutex;
 use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager, RunEvent};
 use windows::{
-    pick_target, restore_targets, Claim, CloseGuard, LastFocus, RestoreEntry, WindowFiles, WindowInit, WindowLabels,
+    pick_target, plan_detach, restore_targets, Claim, CloseGuard, DetachOutcome, DetachPlan, LastFocus, RestoreEntry,
+    TabbarHeight, WindowFiles, WindowInit, WindowLabels, WindowRect,
 };
 
 /// 드롭·열기로 받아들일 최대 파일 크기. 프론트엔드 파싱이라 이보다 크면 메인 스레드가 막힌다.
@@ -306,20 +307,30 @@ fn take_window_init(window: tauri::Window, init: tauri::State<WindowInit>) -> Op
     init.take(window.label())
 }
 
-/// 탭을 새 창으로 분리한다. 창 생성은 Rust만 한다 — 웹뷰에는 창 생성 권한을 열지 않는다.
-/// 소유권을 원 창에서 새 창으로 옮기고, 원 창과 같은 크기로 화면 좌표(논리 픽셀)에 창을 만든다.
-/// 새 창의 라벨을 돌려준다. 원 창의 탭을 닫는 것은 호출한 프론트엔드의 몫이다.
+/// 프론트엔드가 탭바 높이(논리 픽셀)를 시작 때 한 번 알린다 — 병합 판정의 탭바 띠 높이다.
+#[tauri::command]
+fn set_tabbar_height(height: f64, tabbar: tauri::State<TabbarHeight>) {
+    tabbar.set(height);
+}
+
+/// 탭을 분리한다. 놓은 화면 좌표(논리 픽셀) 아래 가장 앞 창이 다른 창의 탭바 띠면 그 창으로 병합한다 —
+/// 소유권을 옮기고 그 창에 `merge-in`(경로·화면 x)을 보내 삽입 위치는 대상 프론트엔드가 정한다.
+/// 아니면 새 창을 만든다 — 창 생성은 Rust만 한다(웹뷰에는 창 생성 권한을 열지 않는다).
+/// 소유권을 원 창에서 새 창으로 옮기고, 원 창과 같은 크기로 그 좌표에 창을 만든다.
+/// 원 창의 탭을 닫는 것은 호출한 프론트엔드의 몫이다.
 #[tauri::command]
 async fn detach_tab(
     app: AppHandle,
     files: tauri::State<'_, WindowFiles>,
     labels: tauri::State<'_, WindowLabels>,
     init: tauri::State<'_, WindowInit>,
+    focus: tauri::State<'_, LastFocus>,
+    tabbar: tauri::State<'_, TabbarHeight>,
     from_label: String,
     path: String,
     screen_x: f64,
     screen_y: f64,
-) -> Result<String, String> {
+) -> Result<DetachOutcome, String> {
     let from = app
         .get_webview_window(&from_label)
         .ok_or_else(|| format!("창을 찾을 수 없습니다: {from_label}"))?;
@@ -328,8 +339,39 @@ async fn detach_tab(
         .map_err(|e| e.to_string())?
         .to_logical::<f64>(from.scale_factor().map_err(|e| e.to_string())?);
     let alive: Vec<String> = app.webview_windows().keys().cloned().collect();
-    let label = labels.alloc(&alive);
     let path_buf = PathBuf::from(&path);
+    let rects: Vec<WindowRect> = app
+        .webview_windows()
+        .iter()
+        .filter_map(|(label, w)| {
+            let (pos, outer, inner) = (w.outer_position().ok()?, w.outer_size().ok()?, w.inner_size().ok()?);
+            // 탭바 띠는 창 안쪽(웹뷰) 기준이므로 네이티브 제목 막대만큼 위를 잘라 낸다.
+            let chrome = outer.height.saturating_sub(inner.height) as f64;
+            Some(WindowRect {
+                label: label.clone(),
+                x: pos.x as f64,
+                y: pos.y as f64 + chrome,
+                width: outer.width as f64,
+                height: inner.height as f64,
+                scale: w.scale_factor().ok()?,
+            })
+        })
+        .collect();
+    if let DetachPlan::Merge(target) =
+        plan_detach(&from_label, (screen_x, screen_y), &rects, &focus.order(), tabbar.get())
+    {
+        if !files.transfer(&from_label, &target, &path_buf) {
+            return Err(format!("이 창이 열고 있는 파일이 아닙니다: {path}"));
+        }
+        if let Some(w) = app.get_webview_window(&target) {
+            let _ = w.unminimize();
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        let _ = app.emit_to(target.as_str(), "merge-in", serde_json::json!({ "path": path, "screen_x": screen_x }));
+        return Ok(DetachOutcome::Merged);
+    }
+    let label = labels.alloc(&alive);
     if !files.transfer(&from_label, &label, &path_buf) {
         return Err(format!("이 창이 열고 있는 파일이 아닙니다: {path}"));
     }
@@ -344,7 +386,7 @@ async fn detach_tab(
             // window-state 플러그인이 라벨 기준 저장값으로 위치·크기를 덮을 수 있어 생성 뒤 다시 지정한다.
             let _ = w.set_size(tauri::LogicalSize::new(size.width, size.height));
             let _ = w.set_position(tauri::LogicalPosition::new(screen_x, screen_y));
-            Ok(label)
+            Ok(DetachOutcome::Detached)
         }
         Err(e) => {
             // 창을 못 만들었으면 원 창이 계속 소유한다.
@@ -530,6 +572,7 @@ pub fn run() {
         .manage(DroppedPaths::default())
         .manage(CloseGuard::default())
         .manage(LastFocus::default())
+        .manage(TabbarHeight::default())
         .manage(WindowFiles::default())
         .manage(WindowLabels::default())
         .manage(WindowInit::default())
@@ -564,6 +607,7 @@ pub fn run() {
             claim_file,
             release_file,
             take_window_init,
+            set_tabbar_height,
             detach_tab,
             restore_windows,
             save_asset,

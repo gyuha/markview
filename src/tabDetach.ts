@@ -23,3 +23,17 @@ export function dropAction(point: DropPoint, bar: BarRect, windowWidth: number, 
   if (point.y < bar.top - thresholdPx || point.y > bar.bottom + thresholdPx) return "detach";
   return "reorder";
 }
+
+export interface TabSpan {
+  left: number;
+  right: number;
+}
+
+/**
+ * 병합으로 들어온 탭이 들어갈 인덱스. 탭 중심선 기준 — x가 어떤 탭의 중심보다 앞이면 그 탭 앞,
+ * 모든 중심을 지났으면 맨 끝. 탭이 없으면 0. x와 사각형은 같은 좌표계(화면)이고 rects는 왼쪽부터 정렬돼 있다.
+ */
+export function insertIndex(x: number, rects: TabSpan[]): number {
+  const i = rects.findIndex((r) => x < (r.left + r.right) / 2);
+  return i === -1 ? rects.length : i;
+}

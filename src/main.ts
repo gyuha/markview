@@ -10,7 +10,7 @@ import { applyEditorTheme, createEditor } from "./editor";
 import { activeHeading, applyFormat, type FormatId } from "./format";
 import { confirmDialog } from "./modal";
 import { openRecentDialog, recordRecent } from "./recent";
-import { dropAction, type DropAction } from "./tabDetach";
+import { dropAction, insertIndex, type DropAction } from "./tabDetach";
 import { applyDocWidth, isDocWidthStorageKey, readDocWidth } from "./docWidth";
 import { readOtherWindows, readRestoreSession, readSession, removeSession, saveSession, type Session } from "./session";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -594,8 +594,9 @@ function dropActionAt(e: PointerEvent, bar: DOMRect): DropAction {
 }
 
 /**
- * 탭을 새 창으로 옮긴다. 미저장이면 먼저 저장하고 옮길지 묻고(저장이 실패하면 옮기지 않는다),
- * Rust가 창을 만들면 이 창에서는 확인 없이 닫는다. 실패하면 탭을 그대로 둔다.
+ * 탭을 새 창으로 옮기거나 다른 창 탭바에 병합한다. 미저장이면 먼저 저장하고 옮길지 묻고(저장이 실패하면 옮기지 않는다),
+ * Rust가 "detached"(새 창)든 "merged"(다른 창으로 이전)든 성공으로 답하면 이 창에서는 확인 없이 닫는다.
+ * 실패하면 탭을 그대로 둔다. 마지막 탭이면 closeTab이 창을 닫는다.
  */
 async function detachTab(tab: Tab, screenX: number, screenY: number): Promise<void> {
   tab.muya?.flush();
@@ -637,6 +638,7 @@ function pressTab(button: HTMLElement, event: PointerEvent): void {
     return r.left + r.width / 2;
   };
   const others = () => [...tabbarEl.children].filter((el): el is HTMLElement => el !== button);
+  let hint: HTMLElement | undefined;
   const onMove = (e: PointerEvent) => {
     if (!dragging) {
       if (Math.abs(e.clientX - startX) < TAB_DRAG_THRESHOLD) return;
@@ -675,12 +677,21 @@ function pressTab(button: HTMLElement, event: PointerEvent): void {
     shift = Math.min(Math.max(want, bar.left - naturalLeft), bar.right - rect.width - naturalLeft);
     button.style.transform = `translateX(${shift}px)`;
     // 탭바를 임계 이상 벗어나면 놓을 때 새 창으로 분리된다 — 그 상태를 반투명·커서로 미리 보여 준다.
-    button.classList.toggle("detach-ready", dropActionAt(e, bar) === "detach");
+    const ready = dropActionAt(e, bar) === "detach";
+    button.classList.toggle("detach-ready", ready);
+    // 탭은 탭바 안에 묶여 있어 임계를 넘어도 눈에 띄지 않는다 — 커서를 따라다니는 안내 문구를 창 안에 붙들어 둔다.
+    if (ready) {
+      hint ??= Object.assign(document.createElement("div"), { className: "detach-hint", textContent: "놓으면 새 창 · 다른 창 탭바에 놓으면 그 창으로 이동" });
+      if (!hint.isConnected) document.body.appendChild(hint);
+      hint.style.left = `${Math.min(Math.max(e.clientX + 14, 8), window.innerWidth - hint.offsetWidth - 8)}px`;
+      hint.style.top = `${Math.min(Math.max(e.clientY + 14, 8), window.innerHeight - hint.offsetHeight - 8)}px`;
+    } else hint?.remove();
   };
   const onEnd = (e: PointerEvent) => {
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onEnd);
     window.removeEventListener("pointercancel", onEnd);
+    hint?.remove();
     if (!dragging) return;
     button.classList.remove("dragging", "detach-ready");
     suppressTabClick = true;
@@ -758,7 +769,7 @@ async function pickAndOpen(): Promise<void> {
  * 같은 경로가 이미 열려 있으면 새 탭을 만들지 않고 그 탭을 활성화한다.
  * `restore`(세션 복원)는 사용자가 새로 연 것이 아니므로 최근 파일을 건드리지 않고, 못 읽어도 알리지 않는다.
  */
-async function openPath(path: string, opts: { restore?: boolean } = {}): Promise<void> {
+async function openPath(path: string, opts: { restore?: boolean; index?: number; claimed?: boolean } = {}): Promise<void> {
   const record = (p: string) => {
     if (!opts.restore) recordRecent(p);
   };
@@ -770,7 +781,8 @@ async function openPath(path: string, opts: { restore?: boolean } = {}): Promise
   }
 
   // 다른 창이 이미 연 파일이면 Rust가 그 창을 앞으로 가져오고 탭 활성화를 알린다 — 여기선 탭을 만들지 않는다.
-  if ((await invoke<Claim>("claim_file", { path })) !== "granted") return;
+  // `claimed`(병합으로 넘어옴)는 Rust가 이미 소유를 옮겼으므로 다시 묻지 않는다.
+  if (!opts.claimed && (await invoke<Claim>("claim_file", { path })) !== "granted") return;
 
   let doc: Doc;
   try {
@@ -812,7 +824,9 @@ async function openPath(path: string, opts: { restore?: boolean } = {}): Promise
   panesEl.appendChild(pane);
 
   const button = createTabButton(doc.path);
-  tabbarEl.appendChild(button);
+  // 삽입 위치가 있으면(병합) 그 인덱스 앞에, 없거나 끝이면 맨 뒤에 붙인다.
+  const at = Math.min(opts.index ?? tabs.length, tabs.length);
+  tabbarEl.insertBefore(button, tabs[at]?.button ?? null);
 
   const tab: Tab = {
     path: doc.path,
@@ -835,7 +849,7 @@ async function openPath(path: string, opts: { restore?: boolean } = {}): Promise
     mtimeMs: doc.mtime_ms,
     dirtyDot: button.querySelector<HTMLElement>('[data-role="dirty"]')!,
   };
-  tabs.push(tab);
+  tabs.splice(at, 0, tab);
   installScrollSync(tab);
   activate(doc.path);
   record(doc.path);
@@ -1145,6 +1159,11 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.querySelector<HTMLElement>("#open-button")!.addEventListener("click", () => void pickAndOpen());
   document.querySelector<HTMLElement>("#recent-button")!.addEventListener("click", () => openRecentDialog((path) => void openPath(path)));
   noticeEl = document.querySelector<HTMLElement>("#notice")!;
+  // 병합 판정의 탭바 띠 아래 끝(창 안쪽 기준). 탭이 없어도 줄 높이가 남도록 탭바가 든 줄을 잰다.
+  const reportTabbarHeight = () =>
+    void invoke("set_tabbar_height", { height: (tabbarEl.parentElement ?? tabbarEl).getBoundingClientRect().bottom });
+  reportTabbarHeight();
+  window.addEventListener("resize", reportTabbarHeight);
   applyDocWidth(readDocWidth());
   // 다른 창이 설정을 바꾸면 localStorage의 storage 이벤트가 온다(자기 창 쓰기에는 오지 않는다). 최근 파일은 대상이 아니다.
   window.addEventListener("storage", (event) => {
@@ -1256,6 +1275,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   // 다른 창이 이 창이 연 파일을 열려 했다 — 새로 열지 않고 그 탭을 보여 준다.
   await listen<string>("activate-tab", (e) => {
     if (findTab(e.payload)) activate(e.payload);
+  });
+  // 다른 창의 탭이 이 창 탭바에 놓였다 — 소유는 Rust가 옮겼으니 놓은 x 위치에 열어 활성화만 한다.
+  await getCurrentWebviewWindow().listen<{ path: string; screen_x: number }>("merge-in", (e) => {
+    const rects = tabs.map((t) => t.button.getBoundingClientRect());
+    const index = insertIndex(e.payload.screen_x, rects.map((r) => ({ left: window.screenX + r.left, right: window.screenX + r.right })));
+    void openPath(e.payload.path, { index, claimed: true });
   });
   // 요청된 파일을 먼저 열면 세션이 그 목록으로 덮이므로, 지난 세션은 열기 전에 읽어 둔다.
   const lastSession = readSession(getCurrentWindow().label);

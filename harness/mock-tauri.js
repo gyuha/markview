@@ -82,10 +82,11 @@
       if (cmd === "release_file") return null;
       // 저장 모킹. 충돌 없이 성공한다.
       if (cmd === "write_markdown") return { conflict: false, mtime_ms: 1 };
-      // 분리 모킹. window.__DETACH_FAIL__ 이면 거절하고, 아니면 새 창 라벨을 돌려준다.
+      // 분리 모킹. window.__DETACH_FAIL__ 이면 거절하고, 아니면 Rust처럼 "merged"/"detached"를 돌려준다
+      // (window.__DETACH_RESULT__ 로 고르고 기본은 "detached").
       if (cmd === "detach_tab") {
         if (window.__DETACH_FAIL__) throw "창을 만들 수 없습니다";
-        return "w2";
+        return window.__DETACH_RESULT__ ?? "detached";
       }
       // ?windowInit=/x.md 는 분리로 만든 새 창의 시작 경로다(1회 소비). 없으면 메인 창처럼 null.
       if (cmd === "take_window_init") {
