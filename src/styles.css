@@ -336,7 +336,10 @@ html .editor-host ::selection {
 }
 
 .tab.dragging {
-  opacity: 0.6;
+  position: relative;
+  z-index: 1;
+  cursor: grabbing;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
 }
 
 .tab.active {
@@ -414,6 +417,11 @@ html .editor-host ::selection {
 
 .muya-host[hidden] {
   display: none;
+}
+
+/* 설정의 문서 너비(--doc-width)를 Muya의 편집 열 너비에도 건다. 없으면 Muya 기본(800px)이다. */
+.muya-host {
+  --editor-area-width: var(--doc-width, 800px);
 }
 
 /* 편집 전용 모드의 찾기/바꾸기 — MarkText components/search/index.vue의 스타일. 색은 Muya 변수(앱 팔레트). */
@@ -763,7 +771,7 @@ html[data-theme] .mu-editor .token.deleted {
 }
 
 .markdown-body {
-  max-width: 46rem;
+  max-width: var(--doc-width, 46rem);
   margin: 0 auto;
   padding: 2.5rem 1.5rem 6rem;
 }

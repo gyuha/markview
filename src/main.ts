@@ -9,6 +9,7 @@ import { applyEditorTheme, createEditor } from "./editor";
 import { activeHeading, applyFormat, type FormatId } from "./format";
 import { confirmDialog } from "./modal";
 import { openRecentDialog, recordRecent } from "./recent";
+import { applyDocWidth, readDocWidth } from "./docWidth";
 import { readRestoreSession, readSession, saveSession, type Session } from "./session";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -567,6 +568,8 @@ function closeTab(path: string): void {
 
 /** 끌기가 시작되려면 가로로 이만큼(px) 움직여야 한다. 그보다 적으면 클릭이다. */
 const TAB_DRAG_THRESHOLD = 4;
+/** 밀려나는 탭과 놓인 탭이 자리를 찾아가는 전환 시간(ms). */
+const TAB_SLIDE_MS = 150;
 /** 끌기가 막 끝났는지 — 놓는 순간 따라오는 click이 그 탭을 활성화하지 않게 한다. */
 let suppressTabClick = false;
 
@@ -574,30 +577,61 @@ let suppressTabClick = false;
  * 탭을 끌어 순서를 바꾼다. HTML5 drag는 쓰지 않는다 — 파일 드롭(onDragDropEvent) 때문에 Tauri의
  * dragDropEnabled를 끌 수 없고, 켜져 있으면 webview 안의 HTML5 드래그가 가로채일 수 있다.
  * move/up은 합성 이벤트로는 포인터 캡처가 실패하므로 setPointerCapture 대신 window에서 받는다.
- * 끄는 동안은 DOM 순서만 바꾸고, `tabs`·세션은 놓을 때 한 번 맞춘다.
+ * 끄는 동안은 DOM 순서와 transform만 바꾸고, `tabs`·세션은 놓을 때 한 번 맞춘다.
  */
 function pressTab(button: HTMLElement, event: PointerEvent): void {
   if (event.button !== 0 || document.querySelector(".modal-backdrop")) return;
   if ((event.target as HTMLElement).closest(".tab-close")) return;
   const startX = event.clientX;
+  const startRect = button.getBoundingClientRect();
+  const startLeft = startRect.left;
+  // 잡은 곳이 탭 중심에서 얼마나 떨어졌는지 — 자리 교체 기준은 커서가 아니라 탭의 시각적 중심이다.
+  const grab = startX - (startLeft + startRect.width / 2);
+  const slideMs = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : TAB_SLIDE_MS;
   let dragging = false;
+  let shift = 0;
   const mid = (el: Element) => {
     const r = el.getBoundingClientRect();
     return r.left + r.width / 2;
   };
+  const others = () => [...tabbarEl.children].filter((el): el is HTMLElement => el !== button);
   const onMove = (e: PointerEvent) => {
     if (!dragging) {
       if (Math.abs(e.clientX - startX) < TAB_DRAG_THRESHOLD) return;
       dragging = true;
       button.classList.add("dragging");
+      button.style.transition = "none";
     }
-    // 이웃 탭의 중간선을 넘은 만큼 자리를 바꾼다.
-    for (let p = button.previousElementSibling; p && e.clientX < mid(p); p = button.previousElementSibling) {
+    // 이웃 탭의 중간선을 넘은 만큼 자리를 바꾼다. 밀려나는 탭은 옛 자리에서 새 자리로 미끄러진다(FLIP).
+    const center = e.clientX - grab;
+    const before = new Map(others().map((el) => [el, el.getBoundingClientRect().left]));
+    let moved = false;
+    for (let p = button.previousElementSibling; p && center < mid(p); p = button.previousElementSibling) {
       tabbarEl.insertBefore(button, p);
+      moved = true;
     }
-    for (let n = button.nextElementSibling; n && e.clientX > mid(n); n = button.nextElementSibling) {
+    for (let n = button.nextElementSibling; n && center > mid(n); n = button.nextElementSibling) {
       tabbarEl.insertBefore(n, button);
+      moved = true;
     }
+    if (moved && slideMs > 0) {
+      for (const [el, left] of before) {
+        const dx = left - el.getBoundingClientRect().left;
+        if (!dx) continue;
+        el.style.transition = "none";
+        el.style.transform = `translateX(${dx}px)`;
+        void el.offsetWidth;
+        el.style.transition = `transform ${slideMs}ms ease`;
+        el.style.transform = "";
+      }
+    }
+    // 끄는 탭은 커서를 따라간다. 자리가 바뀌어 레이아웃 위치가 달라진 만큼 보정해 커서 아래에 붙여 둔다.
+    const bar = tabbarEl.getBoundingClientRect();
+    const rect = button.getBoundingClientRect();
+    const naturalLeft = rect.left - shift;
+    const want = e.clientX - startX - (naturalLeft - startLeft);
+    shift = Math.min(Math.max(want, bar.left - naturalLeft), bar.right - rect.width - naturalLeft);
+    button.style.transform = `translateX(${shift}px)`;
   };
   const onEnd = () => {
     window.removeEventListener("pointermove", onMove);
@@ -607,6 +641,15 @@ function pressTab(button: HTMLElement, event: PointerEvent): void {
     button.classList.remove("dragging");
     suppressTabClick = true;
     window.setTimeout(() => (suppressTabClick = false), 0);
+    // 놓은 탭은 새 자리로 짧게 미끄러져 앉고, 전환이 끝나면 인라인 스타일을 모두 치운다.
+    button.style.transition = slideMs > 0 ? `transform ${slideMs}ms ease` : "";
+    button.style.transform = "";
+    window.setTimeout(() => {
+      for (const el of tabbarEl.children) {
+        (el as HTMLElement).style.transition = "";
+        (el as HTMLElement).style.transform = "";
+      }
+    }, slideMs + 50);
     const order = [...tabbarEl.children];
     tabs.sort((a, b) => order.indexOf(a.button) - order.indexOf(b.button));
     persistSession();
@@ -1050,6 +1093,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.querySelector<HTMLElement>("#open-button")!.addEventListener("click", () => void pickAndOpen());
   document.querySelector<HTMLElement>("#recent-button")!.addEventListener("click", () => openRecentDialog((path) => void openPath(path)));
   noticeEl = document.querySelector<HTMLElement>("#notice")!;
+  applyDocWidth(readDocWidth());
   installViewModeControl();
   installFormatControl();
   installPopovers();

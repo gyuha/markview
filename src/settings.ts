@@ -6,6 +6,7 @@
 import { deriveColors } from "./themeColors";
 import { COLOR_THEMES, type ColorTheme, type ThemeKind } from "./themes.generated";
 import { readColorTheme, saveColorTheme, type Choice } from "./theme";
+import { applyDocWidth, DOC_WIDTHS, readDocWidth, saveDocWidth, type DocWidth } from "./docWidth";
 import { readRestoreSession, saveRestoreSession } from "./session";
 import { createUpdateSection } from "./updateSection";
 
@@ -249,6 +250,52 @@ export function openSettings(host: SettingsHost): void {
   }
   modeSection.append(modeLabel, modes);
 
+  // --- 문서 너비 ---
+  const widthSection = document.createElement("section");
+  const widthLabel = document.createElement("h3");
+  widthLabel.className = "settings-heading";
+  widthLabel.textContent = "문서 너비";
+  const widths = document.createElement("div");
+  widths.className = "settings-modes";
+  widths.setAttribute("role", "radiogroup");
+  widths.setAttribute("aria-label", "문서 너비");
+  const widthButtons = new Map<DocWidth, HTMLButtonElement>();
+  const syncWidths = () => {
+    const current = readDocWidth();
+    for (const [value, button] of widthButtons) {
+      const on = value === current;
+      button.setAttribute("aria-checked", String(on));
+      button.tabIndex = on ? 0 : -1;
+      button.classList.toggle("active", on);
+    }
+  };
+  const pickWidth = (value: DocWidth) => {
+    saveDocWidth(value);
+    applyDocWidth(value);
+    syncWidths();
+  };
+  DOC_WIDTHS.forEach(({ value, label }, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "settings-mode";
+    button.setAttribute("role", "radio");
+    button.dataset.widthChoice = value;
+    button.textContent = label;
+    button.addEventListener("click", () => pickWidth(value));
+    button.addEventListener("keydown", (event) => {
+      const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+      if (!step) return;
+      event.preventDefault();
+      const next = DOC_WIDTHS[(index + step + DOC_WIDTHS.length) % DOC_WIDTHS.length].value;
+      pickWidth(next);
+      widthButtons.get(next)!.focus();
+    });
+    widthButtons.set(value, button);
+    widths.appendChild(button);
+  });
+  syncWidths();
+  widthSection.append(widthLabel, widths);
+
   // --- 색상 테마 ---
   const colorSection = document.createElement("section");
   const colorLabel = document.createElement("h3");
@@ -305,7 +352,7 @@ export function openSettings(host: SettingsHost): void {
 
   // --- 탭: 모양 · 환경. 열면 항상 "모양"이 먼저 보이고, ←/→로 전환한다. 업데이트는 "환경"에 둔다. ---
   const panels: { label: string; nodes: HTMLElement[] }[] = [
-    { label: "모양", nodes: [modeSection, colorSection] },
+    { label: "모양", nodes: [widthSection, modeSection, colorSection] },
     { label: "환경", nodes: [restoreSection, update.section] },
   ];
   const tablist = document.createElement("div");

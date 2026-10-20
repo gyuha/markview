@@ -301,10 +301,40 @@ async function tabdrag() {
 const muya = () => idsRun("muya", "harness/required-muya.txt", "Muya");
 const update = () => idsRun("update", "harness/required-update.txt", "업데이트");
 
+// 문서 너비 4단계 하네스. harness/required-width.txt의 ID가 두 엔진 모두 PASS이고 FAIL이 0개인가.
+async function width() {
+  const required = readFileSync("harness/required-width.txt", "utf8")
+    .split("\n")
+    .map((l) => l.match(/^(W\d{2})\s/)?.[1])
+    .filter(Boolean);
+  generate(["docwidth"]);
+  const results = await withServer((base) =>
+    runSpecs(base, ["docwidth.html?files=1"], { until: (t) => /(^|\n)DONE\s*$/.test(t), timeoutMs: 90000 }),
+  );
+  let bad = 0;
+  for (const r of results) {
+    console.log(`=== ${r.engine} ${r.spec}${r.timedOut ? "  (시간 초과 — DONE 없음)" : ""}\n${r.txt}`);
+    if (r.timedOut) bad++;
+  }
+  for (const engine of ENGINES.map((e) => e.name())) {
+    const lines = results.filter((r) => r.engine === engine).flatMap((r) => r.txt.split("\n"));
+    const fails = lines.filter((l) => /^FAIL\b/.test(l));
+    const passed = new Set(lines.map((l) => l.match(/^PASS\s+\[(W\d{2})\]/)?.[1]).filter(Boolean));
+    const missing = required.filter((id) => !passed.has(id));
+    console.log(`${engine}: 필수 ${required.length}개 중 PASS ${required.length - missing.length}개 · FAIL 줄 ${fails.length}개`);
+    if (missing.length) console.log(`  PASS 없음: ${missing.join(" ")}`);
+    bad += fails.length + missing.length;
+  }
+  console.log(bad === 0 ? "PASS  문서 너비 하네스 전부 통과" : `FAIL  문서 너비 하네스 문제 ${bad}건`);
+  return bad === 0 ? 0 : 1;
+}
+
+
+
 const mode = process.argv[2];
-const modes = { regression, muya, update, recent, colortheme, session, tabkeys, tabdrag };
+const modes = { regression, muya, update, recent, colortheme, session, tabkeys, tabdrag, width };
 if (!modes[mode]) {
-  console.error("사용법: node harness/run.mjs <regression|muya|update|recent|colortheme|session|tabkeys|tabdrag>");
+  console.error("사용법: node harness/run.mjs <regression|muya|update|recent|colortheme|session|tabkeys|tabdrag|width>");
   process.exit(64);
 }
 process.exit(await modes[mode]());

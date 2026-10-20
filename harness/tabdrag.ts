@@ -92,6 +92,48 @@ async function main(): Promise<void> {
   drag(buttonOf(before[0]), [at(buttonOf(before[2]), 0.9)], undefined, buttonOf(before[0]), 2);
   await wait(60);
   check("D06", "×에서 시작한 누름과 오른쪽 버튼은 순서를 바꾸지 않는다", same(afterClose, before) && same(domPaths(), before), `afterClose=${JSON.stringify(afterClose)} afterRight=${JSON.stringify(domPaths())}`);
+  // D07 — 끄는 동안 끄는 탭이 커서를 따라 움직인다(시각적 중심 = 커서, 잡은 곳 오프셋 0)
+  const lead = buttonOf(domPaths()[0]);
+  const x0 = centerX(lead);
+  ptr("pointerdown", lead, x0);
+  ptr("pointermove", document, x0 + 60);
+  const follow = centerX(lead) - (x0 + 60);
+  const raised = lead.classList.contains("dragging");
+  ptr("pointerup", document, x0 + 60);
+  await wait(400);
+  check("D07", "끄는 동안 끄는 탭의 중심이 커서를 2px 안으로 따라가고 dragging 표시가 붙는다", Math.abs(follow) <= 2 && raised, `follow=${follow.toFixed(1)} raised=${raised}`);
+
+  // D08 — 이웃 탭과 자리를 바꾸는 순간: 끄는 탭은 여전히 커서 아래, 밀려난 이웃은 전환 중(transform ≠ none)
+  const order8 = domPaths();
+  const mover = buttonOf(order8[0]);
+  const neighbor = buttonOf(order8[1]);
+  const mx0 = centerX(mover);
+  const aim = at(neighbor, 0.9);
+  ptr("pointerdown", mover, mx0);
+  ptr("pointermove", document, aim);
+  const swapped = domPaths()[0] === order8[1] && domPaths()[1] === order8[0];
+  const underCursor = Math.abs(centerX(mover) - aim) <= 2;
+  const slideNow = getComputedStyle(neighbor).transform;
+  ptr("pointerup", document, aim);
+  await wait(400);
+  check("D08", "자리를 바꾼 직후에도 끄는 탭은 커서 아래에 있고 밀려난 이웃은 transform 전환 중이다", swapped && underCursor && slideNow !== "none", `swapped=${swapped} underCursor=${underCursor} slide=${slideNow}`);
+
+  // D09 — 탭 바 밖으로 끌어도 끄는 탭은 탭 바 가로 범위 안에 머문다
+  const bar = document.querySelector<HTMLElement>("#tabbar")!.getBoundingClientRect();
+  const edge = buttonOf(domPaths()[0]);
+  ptr("pointerdown", edge, centerX(edge));
+  ptr("pointermove", document, bar.right + 500);
+  const rightEdge = edge.getBoundingClientRect().right;
+  ptr("pointermove", document, bar.left - 500);
+  const leftEdge = edge.getBoundingClientRect().left;
+  ptr("pointerup", document, bar.left - 500);
+  await wait(400);
+  check("D09", "탭 바 양쪽 바깥으로 끌어도 끄는 탭이 탭 바 범위 안에 머문다", rightEdge <= bar.right + 0.5 && leftEdge >= bar.left - 0.5, `right=${rightEdge} bar.right=${bar.right} left=${leftEdge} bar.left=${bar.left}`);
+
+  // D10 — 놓고 전환이 끝나면 모든 탭의 인라인 transform·transition이 비고 DOM·tabs·세션 순서가 같다
+  const tidy = [...document.querySelectorAll<HTMLElement>("#tabbar .tab")].every((el) => el.style.transform === "" && el.style.transition === "");
+  check("D10", "놓고 400ms 뒤에는 모든 탭의 인라인 transform·transition이 비고 순서가 DOM·tabs·세션에서 같다", tidy && same(domPaths(), arrPaths()) && same(domPaths(), sessionPaths()), `tidy=${tidy} dom=${JSON.stringify(domPaths())} tabs=${JSON.stringify(arrPaths())} session=${JSON.stringify(sessionPaths())}`);
+
 }
 
 void guard(main);
