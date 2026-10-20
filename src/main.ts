@@ -140,6 +140,8 @@ function activate(path: string): void {
     tab.pane.hidden = !selected;
     tab.button.classList.toggle("active", selected);
     tab.button.setAttribute("aria-selected", String(selected));
+    // 탭이 많아 탭바가 넘칠 때 ⌥숫자로 옮긴 활성 탭이 화면 밖에 남지 않게 한다.
+    if (selected) tab.button.scrollIntoView({ block: "nearest", inline: "nearest" });
     // 감춰지는 탭의 Muya 플로팅 도구(본문 밖 document.body에 붙는다)가 남지 않게 한다.
     if (!selected) tab.muya?.hideAllFloatTools();
   }
