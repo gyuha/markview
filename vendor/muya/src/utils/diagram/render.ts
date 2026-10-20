@@ -141,6 +141,21 @@ export async function renderDiagramForExport({
     await renderDiagram({ ...options, code });
 }
 
+/**
+ * mermaid를 pele로 먼저 그린다. pele가 던지면(지원하지 않는 문법) false를 돌려주고
+ * 호출자가 mermaid로 폴백한다. mermaid 번들은 폴백 때만 로드된다.
+ */
+async function renderMermaidWithPele(code: string, target: HTMLElement): Promise<boolean> {
+    try {
+        const { render } = await import('pele');
+        target.innerHTML = render(code).svg;
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+
 export async function renderDiagram({
     type,
     code,
@@ -150,6 +165,9 @@ export async function renderDiagram({
     plantumlServer,
     sequenceTheme,
 }: IRenderOptions) {
+    if (type === 'mermaid' && await renderMermaidWithPele(code, target))
+        return;
+
     const render = await loadRenderer(type);
     const options = {};
     if (type === 'vega-lite') {
