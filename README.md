@@ -6,10 +6,26 @@ macOS용 마크다운 뷰어. Tauri v2 + TypeScript로 만들었습니다.
 
 ## 설치
 
+- **macOS, Apple Silicon(arm64) 전용** — Intel Mac에서는 실행되지 않습니다
+
+### Homebrew (권장)
+
+```bash
+brew install --cask gyuha/tap/markview
+```
+
+`gyuha/tap` 저장소([gyuha/homebrew-tap](https://github.com/gyuha/homebrew-tap))가 자동으로 추가됩니다. 이 Cask는 설치할 때 markview에 한해 macOS의 격리 속성을 해제하므로 아래의 "우클릭 → 열기"가 필요 없습니다.
+
+```bash
+brew upgrade --cask markview     # 새 버전으로 올리기
+brew uninstall --cask markview   # 지우기
+```
+
+### DMG로 직접 설치
+
 [Releases](https://github.com/gyuha/markview/releases)에서 `.dmg`를 받아 `markview.app`을 `/Applications`으로 옮깁니다.
 
-- **macOS, Apple Silicon(arm64) 전용** — Intel Mac에서는 실행되지 않습니다
-- **Apple Developer ID로 서명되지 않았습니다.** 처음 열 때 macOS가 차단하므로 앱을 **우클릭 → "열기"** 로 실행하세요(더블클릭이 아닙니다). 또는:
+**Apple Developer ID로 서명되지 않았습니다.** 처음 열 때 macOS가 차단하므로 앱을 **우클릭 → "열기"** 로 실행하세요(더블클릭이 아닙니다). 또는:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/markview.app
@@ -17,7 +33,9 @@ xattr -dr com.apple.quarantine /Applications/markview.app
 
 ### 업데이트
 
-설정(⌘,) → **환경** → 업데이트에서 "업데이트 확인"을 누르면 새로 설치하지 않고 바꿀 수 있습니다. 자동으로 확인하지는 않으며, 이 기능이 들어간 버전부터 가능합니다(그 전 버전은 한 번 직접 설치).
+설정(⌘,) → **환경** → 업데이트에서 "업데이트 확인"을 누르면 새로 설치하지 않고 바꿀 수 있습니다. 새 버전이 있으면 릴리스 노트를 보여 주고, 설치하면 진행률을 표시한 뒤 앱이 다시 시작됩니다. 저장하지 않은 문서가 있으면 설치 전에 확인을 묻습니다. 업데이트 파일은 서명 검증을 거치며, 자동으로 확인하지는 않습니다.
+
+이 기능은 **0.3.1부터** 들어 있습니다. 0.3.0 이하는 위의 Homebrew나 DMG로 한 번 올려 주세요.
 
 ### `.md` 파일을 markview로 열기
 
@@ -35,6 +53,12 @@ xattr -dr com.apple.quarantine /Applications/markview.app
 - **마크다운 확장** — GFM 테이블, 취소선, 체크박스, 헤딩 앵커, frontmatter 숨김
 - **raw HTML** — `<details>`나 `<br>` 같은 태그가 원본대로 렌더되고, DOMPurify가 스크립트를 제거합니다
 - **상대 경로 이미지**와 링크 — 외부 링크는 기본 브라우저로, 상대 `.md` 링크는 새 탭으로 열립니다
+- **탭 순서 변경** — 탭을 끌어 순서를 바꿉니다. `⌥1`~`⌥9`로 N번째 탭으로 바로 갑니다
+- **지난 세션 복원** — 다음 실행 때 지난번에 열어 둔 탭을 다시 엽니다
+- **최근 연 파일** — `⌘O`로 검색이 되는 다이얼로그를 엽니다(한글 등 비라틴 입력 상태에서도 동작합니다)
+- **색상 테마 112종** — 라이트·다크 각각에 맞는 색상 테마를 설정에서 고릅니다
+- **설정 창** — `⌘,`. **모양**(테마·색상)과 **환경**(세션 복원·업데이트) 탭이 있습니다
+- **앱 안 업데이트** — 설정 → 환경에서 새로 설치하지 않고 올립니다
 - **창 크기·위치 기억** — 종료 시 저장하고 다음 실행에 복원합니다
 
 ## 단축키
@@ -43,6 +67,9 @@ xattr -dr com.apple.quarantine /Applications/markview.app
 | --- | --- |
 | `F1` / `F2` / `F3` | 편집 전용 / 분할 / 보기 전용 |
 | `⌘E` | 분할 ↔ 보기 전용 전환 |
+| `⌘O` | 최근 연 파일 |
+| `⌘,` | 설정 |
+| `⌥1`~`⌥9` | N번째 탭으로 이동 |
 | `⌘S` | 저장 |
 | `⌘B` / `⌘I` | 굵게 / 기울임 (편집기 안에서) |
 | `⌘R` | 현재 탭 새로고침(파일을 다시 읽음) |
@@ -63,7 +90,9 @@ xattr -dr com.apple.quarantine /Applications/markview.app
 
 서식은 굵게 · 기울임 · 취소선 · 헤딩(제목 1~3과 해제) · 목록 · 번호 목록 · 코드(인라인/코드블록) · 인용 · 링크 · 이미지입니다. 감싸는 서식은 한 번 더 누르면 해제되고, 줄 단위 서식은 선택한 모든 줄에 적용됩니다. 보기 전용 모드에서는 서식 버튼이 잠깁니다.
 
-편집기는 CodeMirror 6이고 문법 강조와 줄 번호가 있습니다. 타이핑을 멈추면 프리뷰가 갱신됩니다.
+**분할 모드**의 편집기는 CodeMirror 6이고 문법 강조와 줄 번호가 있습니다. 타이핑을 멈추면 프리뷰가 갱신됩니다.
+
+**편집 전용 모드**(`F1`)는 [MarkText](https://github.com/marktext/marktext)의 편집 엔진 Muya를 가져온 것입니다. 입력하는 자리에서 바로 서식이 적용되는 WYSIWYG 편집이고, MarkText의 macOS 단축키(`⌘1`~`⌘6` 제목, `⌘F` 찾기, `⌘⌥F` 바꾸기 등)와 이미지 붙여넣기·드롭 저장을 지원합니다. 이미지는 문서 옆 `assets/` 폴더에 저장됩니다.
 
 `⌘S`로 저장합니다. 저장하지 않은 변경이 있으면 탭 이름 옆에 점이 표시되고, 탭이나 창을 닫으려 할 때 확인을 받습니다. 파일이 앱 밖에서 바뀐 뒤 저장하면 덮어쓸지 먼저 묻습니다 — 조용히 덮어쓰지 않습니다.
 
@@ -89,16 +118,16 @@ pnpm tauri build --debug --bundles app  # 빠른 .app 번들 (아이콘·파일 
 - Windows·Linux 미지원 (macOS 전용으로 설계했습니다)
 - 5MB를 넘는 파일과 폴더는 거부합니다 — 파싱이 프론트엔드에서 일어나므로 큰 파일은 UI를 막습니다
 - 파일 변경을 감시하지 않습니다 — 외부에서 고친 내용은 `⌘R`로 다시 읽어야 합니다
-- 문서 내 검색, 인쇄/PDF 내보내기, 탭 순서 변경, 세션 복원이 없습니다
+- 문서 내 검색은 편집 전용 모드(`⌘F`)에서만 되고, 인쇄/PDF 내보내기는 없습니다
 - Dock 아이콘에 파일을 떨어뜨려 여는 것은 지원하지 않습니다
 
 ## 구성
 
-- **Tauri v2** — Rust는 파일 경로·바이트와 창만 다룹니다. 노출된 커맨드는 `read_markdown`(확장자·크기·타입 검사)과 `write_markdown`(이 세션에서 열어 본 경로만 허용, 수정 시각 충돌 감지) 둘뿐입니다
-- **프론트엔드** — 프레임워크 없이 TypeScript + Vite. markdown-it(파싱) · DOMPurify(sanitize) · highlight.js(코드) · mermaid(다이어그램) · CodeMirror 6(편집)
+- **Tauri v2** — Rust는 파일 경로·바이트, 창, 업데이트를 다룹니다. 파일 읽기(`read_markdown`: 확장자·크기·타입 검사)와 쓰기(`write_markdown`: 이 세션에서 열어 본 경로만 허용, 수정 시각 충돌 감지), 이미지 저장, 업데이트 확인·설치(`check_update`·`install_update`)를 커맨드로 노출합니다. 웹 화면에는 업데이트·대화상자·파일 시스템 권한을 주지 않습니다
+- **프론트엔드** — 프레임워크 없이 TypeScript + Vite. markdown-it(파싱) · DOMPurify(sanitize) · highlight.js(코드) · mermaid(다이어그램) · CodeMirror 6(분할 모드 편집) · Muya(편집 전용 모드, MarkText에서 가져옴)
 
 주요 설계 결정은 [`.forge/adr/`](.forge/adr/)에 기록되어 있습니다 — 마크다운 파싱을 프론트엔드에 둔 이유, 프레임워크를 쓰지 않은 이유, raw HTML을 허용하고 sanitize하는 이유, asset protocol 권한을 실행 시점에 문서 단위로 좁히는 이유.
 
 ## 라이선스
 
-MIT — [LICENSE](LICENSE) 참조.
+MIT — [LICENSE](LICENSE) 참조. 편집 전용 모드의 Muya는 MarkText(MIT)에서 가져왔습니다.
