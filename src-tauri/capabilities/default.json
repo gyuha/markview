@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Capability for the main window and windows made by detach_tab (w2, w3, ...)",
   "windows": [
-    "main"
+    "main",
+    "w*"
   ],
   "permissions": [
     "core:default",

@@ -1,13 +1,16 @@
 mod assets;
 mod update;
+mod windows;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager, RunEvent};
+use windows::{
+    pick_target, restore_targets, Claim, CloseGuard, LastFocus, RestoreEntry, WindowFiles, WindowInit, WindowLabels,
+};
 
 /// 드롭·열기로 받아들일 최대 파일 크기. 프론트엔드 파싱이라 이보다 크면 메인 스레드가 막힌다.
 const MAX_BYTES: u64 = 5 * 1024 * 1024;
@@ -31,17 +34,12 @@ fn take_pending_files(state: tauri::State<PendingFiles>) -> Vec<String> {
 #[derive(Default)]
 struct OpenedPaths(Mutex<HashSet<PathBuf>>);
 
-/// 창 닫기를 한 번 통과시키는 플래그.
-/// 닫기 요청을 막고 프론트엔드에 확인을 넘기면, 확인을 마친 프론트엔드가 다시 close()를 부르는데
-/// 그것도 같은 이벤트를 일으켜 무한히 막히게 된다. 이 플래그가 두 번째 요청을 통과시킨다.
-/// (destroy()로 우회하면 더 짧지만 창 상태 저장을 건너뛸 수 있어 택하지 않았다.)
-#[derive(Default)]
-struct CloseGuard(AtomicBool);
-
-/// 프론트엔드가 "닫아도 된다"고 알리는 커맨드. 다음 닫기 요청 한 번을 통과시킨다.
+/// 프론트엔드가 "닫아도 된다"고 알리는 커맨드. 호출한 창의 다음 닫기 요청 한 번을 통과시킨다.
+/// 통과 플래그는 창 라벨별이라 다른 창의 닫기에는 영향이 없다(통과 이유는 windows::CloseGuard 참고;
+/// destroy()로 우회하면 더 짧지만 창 상태 저장을 건너뛸 수 있어 택하지 않았다).
 #[tauri::command]
-fn allow_close(guard: tauri::State<CloseGuard>) {
-    guard.0.store(true, Ordering::SeqCst);
+fn allow_close(window: tauri::WebviewWindow, guard: tauri::State<CloseGuard>) {
+    guard.allow(window.label());
 }
 
 #[derive(serde::Serialize)]
@@ -275,6 +273,126 @@ fn list_image_paths(
     assets::list_image_paths(&set, &PathBuf::from(doc_path), &partial)
 }
 
+/// 이 창이 파일을 열기 전에 소유를 요청한다. 다른 창이 이미 열고 있으면 그 창을 앞으로 가져오고
+/// 그 창에 탭 활성화를 알린 뒤 "다른 창 소유"를 돌려준다 — 호출한 창은 탭을 만들지 않는다.
+#[tauri::command]
+fn claim_file(
+    app: AppHandle,
+    window: tauri::Window,
+    files: tauri::State<WindowFiles>,
+    path: String,
+) -> Claim {
+    let claim = files.claim(window.label(), &PathBuf::from(&path));
+    if let Claim::OtherWindow(owner) = &claim {
+        if let Some(w) = app.get_webview_window(owner) {
+            let _ = w.unminimize();
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        let _ = app.emit_to(owner.as_str(), "activate-tab", path);
+    }
+    claim
+}
+
+/// 탭을 닫을 때 그 파일의 소유를 푼다.
+#[tauri::command]
+fn release_file(window: tauri::Window, files: tauri::State<WindowFiles>, path: String) {
+    files.release(window.label(), &PathBuf::from(path));
+}
+
+/// 새 창이 시작할 때 열 경로를 한 번 돌려준다. 분리로 만든 창만 값이 있고 메인 창은 항상 None이다.
+#[tauri::command]
+fn take_window_init(window: tauri::Window, init: tauri::State<WindowInit>) -> Option<String> {
+    init.take(window.label())
+}
+
+/// 탭을 새 창으로 분리한다. 창 생성은 Rust만 한다 — 웹뷰에는 창 생성 권한을 열지 않는다.
+/// 소유권을 원 창에서 새 창으로 옮기고, 원 창과 같은 크기로 화면 좌표(논리 픽셀)에 창을 만든다.
+/// 새 창의 라벨을 돌려준다. 원 창의 탭을 닫는 것은 호출한 프론트엔드의 몫이다.
+#[tauri::command]
+async fn detach_tab(
+    app: AppHandle,
+    files: tauri::State<'_, WindowFiles>,
+    labels: tauri::State<'_, WindowLabels>,
+    init: tauri::State<'_, WindowInit>,
+    from_label: String,
+    path: String,
+    screen_x: f64,
+    screen_y: f64,
+) -> Result<String, String> {
+    let from = app
+        .get_webview_window(&from_label)
+        .ok_or_else(|| format!("창을 찾을 수 없습니다: {from_label}"))?;
+    let size = from
+        .inner_size()
+        .map_err(|e| e.to_string())?
+        .to_logical::<f64>(from.scale_factor().map_err(|e| e.to_string())?);
+    let alive: Vec<String> = app.webview_windows().keys().cloned().collect();
+    let label = labels.alloc(&alive);
+    let path_buf = PathBuf::from(&path);
+    if !files.transfer(&from_label, &label, &path_buf) {
+        return Err(format!("이 창이 열고 있는 파일이 아닙니다: {path}"));
+    }
+    init.set(&label, path);
+    let built = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::default())
+        .title("markview")
+        .inner_size(size.width, size.height)
+        .position(screen_x, screen_y)
+        .build();
+    match built {
+        Ok(w) => {
+            // window-state 플러그인이 라벨 기준 저장값으로 위치·크기를 덮을 수 있어 생성 뒤 다시 지정한다.
+            let _ = w.set_size(tauri::LogicalSize::new(size.width, size.height));
+            let _ = w.set_position(tauri::LogicalPosition::new(screen_x, screen_y));
+            Ok(label)
+        }
+        Err(e) => {
+            // 창을 못 만들었으면 원 창이 계속 소유한다.
+            files.transfer(&label, &from_label, &path_buf);
+            init.take(&label);
+            Err(e.to_string())
+        }
+    }
+}
+
+/// 메인 창이 시작할 때 저장된 창 세션마다 창을 되살린다. 라벨을 그대로 쓰므로 위치·크기는
+/// window-state 플러그인이 복원하고, 창은 `take_window_init`으로 받은 경로로 자기 세션을 연다.
+#[tauri::command]
+async fn restore_windows(
+    app: AppHandle,
+    init: tauri::State<'_, WindowInit>,
+    windows: Vec<RestoreEntry>,
+) -> Result<(), String> {
+    let alive: Vec<String> = app.webview_windows().keys().cloned().collect();
+    for entry in restore_targets(&windows, &alive) {
+        init.set(&entry.label, entry.path);
+        let built = tauri::WebviewWindowBuilder::new(&app, &entry.label, tauri::WebviewUrl::default())
+            .title("markview")
+            .build();
+        if built.is_err() {
+            init.take(&entry.label);
+        }
+    }
+    Ok(())
+}
+
+/// 메뉴·외부 열기를 받을 창의 라벨. 포커스 창 → 최근 포커스 창 → (아직 포커스를 받은 적 없는) main 순.
+fn target_label(handle: &AppHandle) -> Option<String> {
+    let windows = handle.webview_windows();
+    let alive: Vec<String> = windows.keys().cloned().collect();
+    let focused = windows.iter().find(|(_, w)| w.is_focused().unwrap_or(false)).map(|(l, _)| l.clone());
+    let last = handle.state::<LastFocus>().get();
+    pick_target(focused.as_deref(), last.as_deref(), &alive)
+        .or_else(|| alive.iter().find(|l| *l == "main").cloned())
+}
+
+/// 대상 창에만 이벤트를 보낸다. 대상이 없으면 보낼 곳이 없으므로 버린다.
+fn emit_to_target<S: serde::Serialize + Clone>(handle: &AppHandle, event: &str, payload: S) {
+    if let Some(label) = target_label(handle) {
+        let _ = handle.emit_to(label, event, payload);
+    }
+}
+
 /// 메뉴를 직접 조립한다.
 /// predefined `close_window`의 가속기는 ⌘W로 고정이고 macOS는 메뉴 키 등가물을
 /// responder chain보다 먼저 처리하므로, 그 항목을 두는 한 webview는 ⌘W를 볼 수 없다.
@@ -387,21 +505,21 @@ pub fn run() {
             // 메뉴는 창 개수를 알지만 탭 개수는 모른다 — 탭 판단은 프론트엔드에 맡긴다.
             match event.id().as_ref() {
                 "save" => {
-                    let _ = handle.emit("save", ());
+                    emit_to_target(handle, "save", ());
                 }
                 "settings" => {
-                    let _ = handle.emit("open-settings", ());
+                    emit_to_target(handle, "open-settings", ());
                 }
                 "close-tab" => {
-                    let _ = handle.emit("close-tab", ());
+                    emit_to_target(handle, "close-tab", ());
                 }
                 "close-window" => {
-                    let _ = handle.emit("close-window", ());
+                    emit_to_target(handle, "close-window", ());
                 }
                 "paste-as-plaintext" => {
                     use tauri_plugin_clipboard_manager::ClipboardExt;
                     if let Ok(text) = handle.clipboard().read_text() {
-                        let _ = handle.emit("paste-as-plaintext", text);
+                        emit_to_target(handle, "paste-as-plaintext", text);
                     }
                 }
                 _ => {}
@@ -411,6 +529,10 @@ pub fn run() {
         .manage(OpenedPaths::default())
         .manage(DroppedPaths::default())
         .manage(CloseGuard::default())
+        .manage(LastFocus::default())
+        .manage(WindowFiles::default())
+        .manage(WindowLabels::default())
+        .manage(WindowInit::default())
         .manage(update::PendingUpdate::default())
         // 창 닫기 요청을 막고 프론트엔드에 넘긴다 — 미저장 문서 확인은 탭 상태를 아는 쪽이 해야 한다.
         .on_window_event(|window, event| {
@@ -418,13 +540,20 @@ pub fn run() {
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 window.state::<DroppedPaths>().0.lock().unwrap().extend(paths.iter().cloned());
             }
+            if let tauri::WindowEvent::Focused(true) = event {
+                window.state::<LastFocus>().set(window.label());
+            }
+            if let tauri::WindowEvent::Destroyed = event {
+                window.state::<WindowFiles>().release_all(window.label());
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // 통과 플래그가 서 있으면 내리고 그대로 닫히게 둔다.
-                if window.state::<CloseGuard>().0.swap(false, Ordering::SeqCst) {
+                if window.state::<CloseGuard>().take(window.label()) {
                     return;
                 }
                 api.prevent_close();
-                let _ = window.emit("close-requested", ());
+                // 닫으려는 그 창에만 알린다 — window.emit은 모든 창에 방송한다.
+                let _ = window.emit_to(window.label(), "close-requested", ());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -432,6 +561,11 @@ pub fn run() {
             write_markdown,
             take_pending_files,
             allow_close,
+            claim_file,
+            release_file,
+            take_window_init,
+            detach_tab,
+            restore_windows,
             save_asset,
             copy_asset,
             pick_image,
@@ -457,8 +591,20 @@ pub fn run() {
             if let Some(state) = handle.try_state::<PendingFiles>() {
                 state.0.lock().unwrap().extend(paths);
             }
-            // 프론트엔드가 이미 살아 있으면 지금 가져가라고 알린다. 아직이면 시작 시 버퍼를 비운다.
-            let _ = handle.emit("files-opened", ());
+            // 마지막 포커스 창이 가져가게 알린다. 아직 리스너 전이면 시작 시 버퍼를 비운다.
+            // 받을 창이 하나도 없으면(모두 닫힘) 새 창을 만든다 — 새 창이 시작 때 버퍼를 비운다.
+            match target_label(handle) {
+                Some(label) => {
+                    let _ = handle.emit_to(label, "files-opened", ());
+                }
+                None => {
+                    let alive: Vec<String> = handle.webview_windows().keys().cloned().collect();
+                    let label = handle.state::<WindowLabels>().alloc(&alive);
+                    let _ = tauri::WebviewWindowBuilder::new(handle, &label, tauri::WebviewUrl::default())
+                        .title("markview")
+                        .build();
+                }
+            }
         }
     });
 }

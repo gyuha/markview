@@ -8,7 +8,7 @@ const arrPaths = () => tabs().map((t) => t.path);
 const sessionPaths = (): string[] | null => {
   const writes = (window as unknown as { __SESSION_WRITES__: string[] }).__SESSION_WRITES__;
   const last = writes.at(-1);
-  return last ? (JSON.parse(last) as { paths: string[] }).paths : null;
+  return last ? (JSON.parse(last) as { windows: { main: { paths: string[] } } }).windows.main.paths : null;
 };
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const buttonOf = (path: string) => [...document.querySelectorAll<HTMLElement>("#tabbar .tab")].find((b) => b.title === path)!;
