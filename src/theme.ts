@@ -46,6 +46,11 @@ const HLJS_CSS = `
 .hljs-deletion { color: var(--tok-var); background-color: var(--tok-removed-bg); }
 `;
 
+/** 다른 창이 바꾼 저장 키가 테마(선택·색상 테마)에 관한 것인지 — storage 이벤트 동기화용. */
+export function isThemeStorageKey(key: string | null): boolean {
+  return key === STORAGE_KEY || key === COLOR_KEY.light || key === COLOR_KEY.dark;
+}
+
 export function readChoice(): Choice {
   const stored = localStorage.getItem(STORAGE_KEY);
   return CHOICES.includes(stored as Choice) ? (stored as Choice) : "system";

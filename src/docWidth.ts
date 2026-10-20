@@ -20,6 +20,11 @@ const CSS_VALUE: Record<DocWidth, string | null> = {
   full: "100%",
 };
 
+/** 다른 창이 바꾼 저장 키가 문서 너비인지 — storage 이벤트 동기화용. */
+export function isDocWidthStorageKey(key: string | null): boolean {
+  return key === KEY;
+}
+
 /** 저장된 값. 없거나 모르는 값이면 '보통'이다. */
 export function readDocWidth(): DocWidth {
   try {

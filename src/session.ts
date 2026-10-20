@@ -10,26 +10,68 @@ export interface Session {
   active: string | null;
 }
 
-export function readSession(): Session {
+/** 창 라벨 → 그 창의 세션. 옛 형식(단일 {paths, active})은 main 창의 것으로 읽는다. */
+type WindowSessions = Record<string, Session>;
+
+const MAIN_LABEL = "main";
+const EMPTY: Session = { paths: [], active: null };
+
+function parseEntry(value: unknown): Session {
+  if (typeof value !== "object" || value === null) return { ...EMPTY, paths: [] };
+  const { paths, active } = value as { paths?: unknown; active?: unknown };
+  return {
+    paths: Array.isArray(paths) ? paths.filter((p): p is string => typeof p === "string") : [],
+    active: typeof active === "string" ? active : null,
+  };
+}
+
+function readAll(): WindowSessions {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(SESSION_KEY) ?? "null");
-    if (typeof parsed !== "object" || parsed === null) return { paths: [], active: null };
-    const { paths, active } = parsed as { paths?: unknown; active?: unknown };
-    return {
-      paths: Array.isArray(paths) ? paths.filter((p): p is string => typeof p === "string") : [],
-      active: typeof active === "string" ? active : null,
-    };
+    if (typeof parsed !== "object" || parsed === null) return {};
+    const { windows } = parsed as { windows?: unknown };
+    if (typeof windows === "object" && windows !== null) {
+      const result: WindowSessions = {};
+      for (const [label, entry] of Object.entries(windows)) result[label] = parseEntry(entry);
+      return result;
+    }
+    // 옛 단일 값 — 창이 하나뿐이던 시절의 기록이므로 main 창의 세션이다.
+    return { [MAIN_LABEL]: parseEntry(parsed) };
   } catch {
-    return { paths: [], active: null };
+    return {};
   }
 }
 
-export function saveSession(paths: string[], active: string | null): void {
+function writeAll(windows: WindowSessions): void {
   try {
-    localStorage.setItem(SESSION_KEY, JSON.stringify({ paths, active }));
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ windows }));
   } catch {
     // 저장소를 못 쓰면 다음 실행에서 복원할 것이 없을 뿐이다.
   }
+}
+
+export function readSession(label: string = MAIN_LABEL): Session {
+  const entry = readAll()[label];
+  return entry ? { paths: [...entry.paths], active: entry.active } : { paths: [], active: null };
+}
+
+/** 이 창의 항목만 갱신한다 — 다른 창의 항목은 그대로 둔다. */
+export function saveSession(label: string, paths: string[], active: string | null): void {
+  writeAll({ ...readAll(), [label]: { paths, active } });
+}
+
+/** 이 창의 항목을 지운다 — 직접 닫은 창은 다음 실행에서 복원하지 않는다. 다른 창 항목은 그대로다. */
+export function removeSession(label: string): void {
+  const windows = readAll();
+  delete windows[label];
+  writeAll(windows);
+}
+
+/** 되살릴 창 — main 아닌 항목 중 열 탭이 있는 것. 시작 경로는 활성 탭(없으면 첫 탭)이다. */
+export function readOtherWindows(): { label: string; path: string }[] {
+  return Object.entries(readAll())
+    .filter(([label, s]) => label !== MAIN_LABEL && s.paths.length > 0)
+    .map(([label, s]) => ({ label, path: s.active && s.paths.includes(s.active) ? s.active : s.paths[0] }));
 }
 
 /** 저장된 값이 없으면 켬이다 — 토글은 복원 여부만 정하고 기록은 항상 한다. */

@@ -1,6 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 // 값으로 가져온다 — scrollIntoView 이펙트를 쓴다. editor.ts가 이미 번들에 넣으므로 크기 변화는 없다.
 import { EditorView } from "@codemirror/view";
@@ -9,8 +10,9 @@ import { applyEditorTheme, createEditor } from "./editor";
 import { activeHeading, applyFormat, type FormatId } from "./format";
 import { confirmDialog } from "./modal";
 import { openRecentDialog, recordRecent } from "./recent";
-import { applyDocWidth, readDocWidth } from "./docWidth";
-import { readRestoreSession, readSession, saveSession, type Session } from "./session";
+import { dropAction, insertIndex, type DropAction } from "./tabDetach";
+import { applyDocWidth, isDocWidthStorageKey, readDocWidth } from "./docWidth";
+import { readOtherWindows, readRestoreSession, readSession, removeSession, saveSession, type Session } from "./session";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { MuyaEditor, MuyaHost } from "./muya";
@@ -21,6 +23,7 @@ import {
   applyChrome,
   applyNativeTheme,
   effectiveOf,
+  isThemeStorageKey,
   onSystemChange,
   readChoice,
   saveChoice,
@@ -35,6 +38,9 @@ interface Doc {
   text: string;
   mtime_ms: number;
 }
+
+/** Rust `claim_file`의 결과 — 다른 창이 소유하면 `{ "other-window": 라벨 }`. */
+type Claim = "granted" | { "other-window": string };
 
 interface SaveOutcome {
   conflict: boolean;
@@ -128,6 +134,7 @@ let restoring = false;
 function persistSession(): void {
   if (restoring) return;
   saveSession(
+    getCurrentWindow().label,
     tabs.map((t) => t.path),
     activePath,
   );
@@ -168,11 +175,15 @@ function markDirty(tab: Tab, dirty: boolean): void {
 
 /** 활성 탭을 저장한다. 외부에서 파일이 바뀌어 있으면 확인을 받고 덮어쓴다. */
 async function saveActive(force = false): Promise<void> {
-  if (!activePath) return;
-  const tab = findTab(activePath);
+  const tab = activePath ? findTab(activePath) : undefined;
+  if (tab) await saveTab(tab, force);
+}
+
+/** 탭을 저장한다. 저장돼 더 쓸 것이 없으면 true, 충돌을 덮어쓰지 않았거나 실패하면 false. */
+async function saveTab(tab: Tab, force = false): Promise<boolean> {
   // Muya는 입력을 묶어서 내보낸다 — 저장 직전에 밀어내야 마지막 입력까지 원문에 들어간다.
-  tab?.muya?.flush();
-  if (!tab || !tab.dirty) return;
+  tab.muya?.flush();
+  if (!tab.dirty) return true;
 
   const text = tab.source;
   try {
@@ -187,14 +198,15 @@ async function saveActive(force = false): Promise<void> {
         message: `${basename(tab.path)} 파일이 외부에서 변경되었습니다.\n덮어쓰면 그 변경이 사라집니다.`,
         confirmLabel: "덮어쓰기",
       });
-      if (overwrite) await saveActive(true);
-      return;
+      return overwrite ? await saveTab(tab, true) : false;
     }
     tab.mtimeMs = outcome.mtime_ms;
     // 쓰는 동안 들어온 편집(Muya는 입력을 묶어 늦게 내보낸다)은 아직 저장되지 않았다.
     markDirty(tab, tab.source !== text);
+    return !tab.dirty;
   } catch (e) {
     notify(String(e));
+    return false;
   }
 }
 
@@ -544,10 +556,11 @@ async function requestCloseTab(path: string): Promise<void> {
 function closeTab(path: string): void {
   const index = tabs.findIndex((t) => t.path === path);
   if (index < 0) return;
+  void invoke("release_file", { path });
   // 마지막 문서를 닫으면 빈 화면을 남기지 않고 창을 닫는다 (Safari·Chrome과 같은 동작).
   if (tabs.length === 1) {
-    // 마지막 탭을 직접 닫은 것이므로 다음 실행에서 복원할 것이 없다.
-    saveSession([], null);
+    // 마지막 탭을 직접 닫은 것이므로 이 창은 다음 실행에서 복원할 것이 없다(다른 창 항목은 둔다).
+    removeSession(getCurrentWindow().label);
     void getCurrentWindow().close();
     return;
   }
@@ -575,6 +588,36 @@ const TAB_SLIDE_MS = 150;
 /** 끌기가 막 끝났는지 — 놓는 순간 따라오는 click이 그 탭을 활성화하지 않게 한다. */
 let suppressTabClick = false;
 
+/** 탭이 이 거리(px)보다 탭바에서 위·아래로 더 벗어나 놓이면 새 창으로 분리한다. */
+const DETACH_THRESHOLD_PX = 40;
+
+function dropActionAt(e: PointerEvent, bar: DOMRect): DropAction {
+  return dropAction({ x: e.clientX, y: e.clientY }, bar, window.innerWidth, DETACH_THRESHOLD_PX);
+}
+
+/**
+ * 탭을 새 창으로 옮기거나 다른 창 탭바에 병합한다. 미저장이면 먼저 저장하고 옮길지 묻고(저장이 실패하면 옮기지 않는다),
+ * Rust가 "detached"(새 창)든 "merged"(다른 창으로 이전)든 성공으로 답하면 이 창에서는 확인 없이 닫는다.
+ * 실패하면 탭을 그대로 둔다. 마지막 탭이면 closeTab이 창을 닫는다.
+ */
+async function detachTab(tab: Tab, screenX: number, screenY: number): Promise<void> {
+  tab.muya?.flush();
+  if (tab.dirty) {
+    const ok = await confirmDialog({
+      message: `${basename(tab.path)}에 저장하지 않은 변경이 있습니다.\n저장하고 새 창으로 옮깁니다.`,
+      confirmLabel: "저장하고 옮기기",
+    });
+    if (!ok || !(await saveTab(tab))) return;
+  }
+  try {
+    await invoke("detach_tab", { fromLabel: getCurrentWindow().label, path: tab.path, screenX, screenY });
+  } catch (e) {
+    notify(String(e));
+    return;
+  }
+  closeTab(tab.path);
+}
+
 /**
  * 탭을 끌어 순서를 바꾼다. HTML5 drag는 쓰지 않는다 — 파일 드롭(onDragDropEvent) 때문에 Tauri의
  * dragDropEnabled를 끌 수 없고, 켜져 있으면 webview 안의 HTML5 드래그가 가로채일 수 있다.
@@ -597,6 +640,7 @@ function pressTab(button: HTMLElement, event: PointerEvent): void {
     return r.left + r.width / 2;
   };
   const others = () => [...tabbarEl.children].filter((el): el is HTMLElement => el !== button);
+  let hint: HTMLElement | undefined;
   const onMove = (e: PointerEvent) => {
     if (!dragging) {
       if (Math.abs(e.clientX - startX) < TAB_DRAG_THRESHOLD) return;
@@ -634,13 +678,24 @@ function pressTab(button: HTMLElement, event: PointerEvent): void {
     const want = e.clientX - startX - (naturalLeft - startLeft);
     shift = Math.min(Math.max(want, bar.left - naturalLeft), bar.right - rect.width - naturalLeft);
     button.style.transform = `translateX(${shift}px)`;
+    // 탭바를 임계 이상 벗어나면 놓을 때 새 창으로 분리된다 — 그 상태를 반투명·커서로 미리 보여 준다.
+    const ready = dropActionAt(e, bar) === "detach";
+    button.classList.toggle("detach-ready", ready);
+    // 탭은 탭바 안에 묶여 있어 임계를 넘어도 눈에 띄지 않는다 — 커서를 따라다니는 안내 문구를 창 안에 붙들어 둔다.
+    if (ready) {
+      hint ??= Object.assign(document.createElement("div"), { className: "detach-hint", textContent: "놓으면 새 창 · 다른 창 탭바에 놓으면 그 창으로 이동" });
+      if (!hint.isConnected) document.body.appendChild(hint);
+      hint.style.left = `${Math.min(Math.max(e.clientX + 14, 8), window.innerWidth - hint.offsetWidth - 8)}px`;
+      hint.style.top = `${Math.min(Math.max(e.clientY + 14, 8), window.innerHeight - hint.offsetHeight - 8)}px`;
+    } else hint?.remove();
   };
-  const onEnd = () => {
+  const onEnd = (e: PointerEvent) => {
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onEnd);
     window.removeEventListener("pointercancel", onEnd);
+    hint?.remove();
     if (!dragging) return;
-    button.classList.remove("dragging");
+    button.classList.remove("dragging", "detach-ready");
     suppressTabClick = true;
     window.setTimeout(() => (suppressTabClick = false), 0);
     // 놓은 탭은 새 자리로 짧게 미끄러져 앉고, 전환이 끝나면 인라인 스타일을 모두 치운다.
@@ -655,6 +710,10 @@ function pressTab(button: HTMLElement, event: PointerEvent): void {
     const order = [...tabbarEl.children];
     tabs.sort((a, b) => order.indexOf(a.button) - order.indexOf(b.button));
     persistSession();
+    if (e.type === "pointerup" && dropActionAt(e, tabbarEl.getBoundingClientRect()) === "detach") {
+      const tab = tabs.find((t) => t.button === button);
+      if (tab) void detachTab(tab, e.screenX, e.screenY);
+    }
   };
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onEnd);
@@ -712,7 +771,7 @@ async function pickAndOpen(): Promise<void> {
  * 같은 경로가 이미 열려 있으면 새 탭을 만들지 않고 그 탭을 활성화한다.
  * `restore`(세션 복원)는 사용자가 새로 연 것이 아니므로 최근 파일을 건드리지 않고, 못 읽어도 알리지 않는다.
  */
-async function openPath(path: string, opts: { restore?: boolean } = {}): Promise<void> {
+async function openPath(path: string, opts: { restore?: boolean; index?: number; claimed?: boolean } = {}): Promise<void> {
   const record = (p: string) => {
     if (!opts.restore) recordRecent(p);
   };
@@ -723,10 +782,15 @@ async function openPath(path: string, opts: { restore?: boolean } = {}): Promise
     return;
   }
 
+  // 다른 창이 이미 연 파일이면 Rust가 그 창을 앞으로 가져오고 탭 활성화를 알린다 — 여기선 탭을 만들지 않는다.
+  // `claimed`(병합으로 넘어옴)는 Rust가 이미 소유를 옮겼으므로 다시 묻지 않는다.
+  if (!opts.claimed && (await invoke<Claim>("claim_file", { path })) !== "granted") return;
+
   let doc: Doc;
   try {
     doc = await invoke<Doc>("read_markdown", { path });
   } catch (e) {
+    void invoke("release_file", { path });
     if (!opts.restore) notify(String(e));
     return;
   }
@@ -762,7 +826,9 @@ async function openPath(path: string, opts: { restore?: boolean } = {}): Promise
   panesEl.appendChild(pane);
 
   const button = createTabButton(doc.path);
-  tabbarEl.appendChild(button);
+  // 삽입 위치가 있으면(병합) 그 인덱스 앞에, 없거나 끝이면 맨 뒤에 붙인다.
+  const at = Math.min(opts.index ?? tabs.length, tabs.length);
+  tabbarEl.insertBefore(button, tabs[at]?.button ?? null);
 
   const tab: Tab = {
     path: doc.path,
@@ -785,7 +851,7 @@ async function openPath(path: string, opts: { restore?: boolean } = {}): Promise
     mtimeMs: doc.mtime_ms,
     dirtyDot: button.querySelector<HTMLElement>('[data-role="dirty"]')!,
   };
-  tabs.push(tab);
+  tabs.splice(at, 0, tab);
   installScrollSync(tab);
   activate(doc.path);
   record(doc.path);
@@ -1095,7 +1161,21 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.querySelector<HTMLElement>("#open-button")!.addEventListener("click", () => void pickAndOpen());
   document.querySelector<HTMLElement>("#recent-button")!.addEventListener("click", () => openRecentDialog((path) => void openPath(path)));
   noticeEl = document.querySelector<HTMLElement>("#notice")!;
+  // 병합 판정의 탭바 띠 아래 끝(창 안쪽 기준). 탭이 없어도 줄 높이가 남도록 탭바가 든 줄을 잰다.
+  const reportTabbarHeight = () =>
+    void invoke("set_tabbar_height", { height: (tabbarEl.parentElement ?? tabbarEl).getBoundingClientRect().bottom });
+  reportTabbarHeight();
+  window.addEventListener("resize", reportTabbarHeight);
   applyDocWidth(readDocWidth());
+  // 다른 창이 설정을 바꾸면 localStorage의 storage 이벤트가 온다(자기 창 쓰기에는 오지 않는다). 최근 파일은 대상이 아니다.
+  window.addEventListener("storage", (event) => {
+    if (isDocWidthStorageKey(event.key)) applyDocWidth(readDocWidth());
+    else if (isThemeStorageKey(event.key)) {
+      choice = readChoice();
+      syncThemeControl();
+      void applyTheme();
+    }
+  });
   installViewModeControl();
   installFormatControl();
   installPopovers();
@@ -1193,15 +1273,37 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   // OS 파일 연결로 넘어온 경로. Rust 버퍼가 단일 출처이므로 시작 시 한 번 비우고,
   // 실행 중에 새로 열리면 알림을 받아 다시 비운다 — 비우는 방식이라 중복 열기가 없다.
-  await listen("files-opened", () => void drainPendingFiles());
+  await getCurrentWebviewWindow().listen("files-opened", () => void drainPendingFiles());
+  // 다른 창이 이 창이 연 파일을 열려 했다 — 새로 열지 않고 그 탭을 보여 준다.
+  await listen<string>("activate-tab", (e) => {
+    if (findTab(e.payload)) activate(e.payload);
+  });
+  // 다른 창의 탭이 이 창 탭바에 놓였다 — 소유는 Rust가 옮겼으니 놓은 x 위치에 열어 활성화만 한다.
+  await getCurrentWebviewWindow().listen<{ path: string; screen_x: number }>("merge-in", (e) => {
+    const rects = tabs.map((t) => t.button.getBoundingClientRect());
+    const index = insertIndex(e.payload.screen_x, rects.map((r) => ({ left: window.screenX + r.left, right: window.screenX + r.right })));
+    void openPath(e.payload.path, { index, claimed: true });
+  });
   // 요청된 파일을 먼저 열면 세션이 그 목록으로 덮이므로, 지난 세션은 열기 전에 읽어 둔다.
-  const lastSession = readSession();
-  const requested = await drainPendingFiles();
-  // 요청 없이 시작했을 때만 지난 세션을 되살린다 — 요청된 파일이 있으면 그 파일만 연다.
-  if (requested.length === 0 && readRestoreSession()) await restoreSession(lastSession);
+  const lastSession = readSession(getCurrentWindow().label);
+  // 분리로 만든 새 창은 자기에게 넘어온 파일만 연다 — 세션 복원과 take_pending_files는 메인 창 시작 때만 한다.
+  const windowInit = await invoke<string | null>("take_window_init");
+  if (windowInit) {
+    // 지난 세션에서 되살린 창이면(시작 경로가 자기 세션에 있음) 그 창의 탭을 모두 되살린다.
+    if (lastSession.paths.includes(windowInit) && readRestoreSession()) await restoreSession(lastSession);
+    else await openPath(windowInit);
+  } else {
+    const requested = await drainPendingFiles();
+    // 요청 없이 시작했을 때만 지난 세션을 되살린다 — 요청된 파일이 있으면 그 파일만 연다.
+    if (requested.length === 0 && readRestoreSession()) {
+      // 메인 창이 다른 창의 세션도 되살린다 — 창은 Rust가 만들고 각 창이 자기 라벨의 세션을 연다.
+      if (getCurrentWindow().label === "main") void invoke("restore_windows", { windows: readOtherWindows() });
+      await restoreSession(lastSession);
+    }
+  }
 
   // ⌘W는 메뉴를 거쳐 온다(가속기가 메뉴에 묶여 있어 keydown으로는 오지 않는다).
-  await listen("close-tab", () => {
+  await getCurrentWebviewWindow().listen("close-tab", () => {
     // 탭이 하나 남았을 때 창을 닫는 판단은 closeTab 안에 있다 — 가운데 클릭도 같은 경로를 탄다.
     if (activePath) {
       void requestCloseTab(activePath);
@@ -1211,10 +1313,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   // ⌘S는 메뉴 가속기다 — macOS는 메뉴 키 등가물을 webview보다 먼저 처리하므로
   // keydown으로 잡으려 해도 오지 않는다(⌘W와 같은 이유).
-  await listen("save", () => void saveActive());
-  await listen("open-settings", showSettings);
+  await getCurrentWebviewWindow().listen("save", () => void saveActive());
+  await getCurrentWebviewWindow().listen("open-settings", showSettings);
   // ⇧⌘V(메뉴) — Rust가 읽은 클립보드 글자. 편집 전용은 MarkText의 일반 텍스트 붙여넣기, 분할은 CM에 그대로 넣는다.
-  await listen<string>("paste-as-plaintext", (event) => {
+  await getCurrentWebviewWindow().listen<string>("paste-as-plaintext", (event) => {
     const tab = activePath ? findTab(activePath) : undefined;
     if (tab?.mode === "edit" && tab.muya) {
       const muya = tab.muya;
@@ -1223,10 +1325,10 @@ window.addEventListener("DOMContentLoaded", async () => {
       tab.editor.dispatch(tab.editor.state.replaceSelection(event.payload));
     }
   });
-  await listen("close-window", () => void requestCloseWindow());
+  await getCurrentWebviewWindow().listen("close-window", () => void requestCloseWindow());
 
   // Rust가 창 닫기를 막고 넘긴 요청 — 미저장 문서가 있으면 확인을 받는다.
-  await listen("close-requested", () => void requestCloseWindow());
+  await getCurrentWebviewWindow().listen("close-requested", () => void requestCloseWindow());
 });
 
 /** 창을 닫아도 되는지 확인한 뒤 닫는다. 미저장 탭이 여러 개면 한 번만 묻는다. */
@@ -1244,6 +1346,8 @@ async function requestCloseWindow(): Promise<void> {
   for (const tab of tabs) markDirty(tab, false);
   // Rust가 다음 닫기 요청 한 번을 통과시키도록 알린다 — 그러지 않으면 다시 막힌다.
   await invoke("allow_close");
+  // 닫기 버튼으로 직접 닫은 창은 다음 실행에서 복원하지 않는다 — 앱 종료(⌘Q)는 이 경로를 거치지 않아 항목이 남는다.
+  removeSession(getCurrentWindow().label);
   await getCurrentWindow().close();
 }
 

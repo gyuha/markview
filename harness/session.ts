@@ -24,6 +24,9 @@ const tabsOf = () => (window as unknown as { __MARKVIEW_TABS__?: HTab[] }).__MAR
 const pathsOfTabs = () => tabsOf().map((t) => t.path);
 const activeOf = () => tabsOf().find((t) => !t.pane.hidden)?.path ?? null;
 const session = () => JSON.parse(localStorage.getItem("markview.session") ?? "null");
+// 세션은 창 라벨별 목록({windows:{main,…}})이다. 이 하네스의 창 라벨은 main. 항목이 없으면 null.
+const mainOf = (raw: unknown = session()) => (raw as { windows?: Record<string, unknown> } | null)?.windows?.main ?? null;
+const otherOf = () => (session() as { windows?: Record<string, unknown> } | null)?.windows?.w2 ?? null;
 const writes = () => (window as unknown as { __SESSION_WRITES__: string[] }).__SESSION_WRITES__;
 const closeButton = (t: HTab) => t.button.querySelector<HTMLElement>(".tab-close")!;
 
@@ -40,13 +43,14 @@ async function pageOpenedTabs(): Promise<void> {
   await waitFor(() => tabsOf().length === 3);
 
   // S01 — 열고 · 전환하고 · 닫을 때마다 즉시 기록된다.
-  const afterOpen = session();
+  const rawOpen = session();
+  const afterOpen = mainOf(rawOpen);
   tabsOf()[0].button.click();
   await wait(100);
-  const afterSwitch = session();
+  const afterSwitch = mainOf();
   closeButton(tabsOf()[1]).click();
   await wait(150);
-  const afterClose = session();
+  const afterClose = mainOf();
   check(
     "S01",
     "탭을 열고·전환하고·닫으면 markview.session에 경로·순서·활성 탭이 즉시 기록된다",
@@ -54,6 +58,14 @@ async function pageOpenedTabs(): Promise<void> {
       same(afterSwitch, { paths: [H1, H2, H3], active: H1 }) &&
       same(afterClose, { paths: [H1, H3], active: H1 }),
     `open=${JSON.stringify(afterOpen)} switch=${JSON.stringify(afterSwitch)} close=${JSON.stringify(afterClose)}`,
+  );
+
+  // S10 — 저장 형식은 창 라벨별 목록이다(옛 최상위 paths·active는 남지 않는다).
+  check(
+    "S10",
+    "세션은 {windows:{main:{paths,active}}} 창 라벨별 목록으로 기록된다",
+    same(rawOpen, { windows: { main: { paths: [H1, H2, H3], active: H3 } } }),
+    `raw=${JSON.stringify(rawOpen)}`,
   );
 
   // S07 — 설정 다이얼로그는 "모양"·"환경" 두 탭이고 처음엔 "모양".
@@ -100,7 +112,7 @@ async function pageOpenedTabs(): Promise<void> {
   check(
     "S08",
     "환경 토글은 기본 켬이고 클릭하면 markview.restoreSession이 바뀌며, 꺼도 세션 기록은 계속된다",
-    defaultOn && storedOff === "false" && switchOff && same(session(), { paths: [H1, H3], active: H3 }),
+    defaultOn && storedOff === "false" && switchOff && same(mainOf(), { paths: [H1, H3], active: H3 }),
     `defaultOn=${defaultOn} stored=${storedOff} switchOff=${switchOff} session=${JSON.stringify(session())}`,
   );
 
@@ -109,7 +121,82 @@ async function pageOpenedTabs(): Promise<void> {
     closeButton(t).click();
     await wait(120);
   }
-  check("S09", "모든 탭을 닫으면 세션이 빈 목록으로 기록된다", same(session(), { paths: [], active: null }), `session=${JSON.stringify(session())}`);
+  check("S09", "모든 탭을 닫으면 이 창의 세션 항목이 비어 있다(항목 없음)", mainOf() === null, `session=${JSON.stringify(session())}`);
+}
+
+// 다른 창(w2) 항목이 심어진 채 이 창(main)만 열고 닫는다.
+async function pageMulti(): Promise<void> {
+  await waitFor(() => tabsOf().length === 2);
+  const w2 = { paths: ["/tmp/o.md"], active: "/tmp/o.md" };
+  check(
+    "S13",
+    "이 창이 세션을 쓸 때 다른 창 라벨의 항목은 그대로 남는다",
+    same(mainOf(), { paths: [H1, H2], active: H2 }) && same(otherOf(), w2),
+    `session=${JSON.stringify(session())}`,
+  );
+  closeButton(tabsOf()[0]).click();
+  await wait(150);
+  const afterOne = mainOf();
+  closeButton(tabsOf()[0]).click();
+  await wait(150);
+  check(
+    "S12",
+    "마지막 탭을 직접 닫으면 이 창 항목만 제거되고 다른 창 항목은 남는다",
+    same(afterOne, { paths: [H2], active: H2 }) && mainOf() === null && same(otherOf(), w2),
+    `afterOne=${JSON.stringify(afterOne)} session=${JSON.stringify(session())}`,
+  );
+}
+
+const callsOf = (cmd: string) =>
+  (window as unknown as { __TAURI_MOCK_CALLS__: { cmd: string; args: unknown }[] }).__TAURI_MOCK_CALLS__.filter((c) => c.cmd === cmd);
+const emitTauri = (event: string) => (window as unknown as { __emitTauri: (e: string) => void }).__emitTauri(event);
+
+// 다른 창(w2) 항목이 심긴 채 요청 없이 시작한다 — 메인 창은 w2를 되살리게 하고, 닫는 경로별로 항목이 남는지 본다.
+async function pageCloseWindow(): Promise<void> {
+  await waitFor(() => tabsOf().length === 1);
+  const restored = callsOf("restore_windows");
+  check(
+    "S02",
+    "메인 창은 시작할 때 main이 아닌 저장된 창 항목마다 Rust에 창 복원을 요청한다",
+    restored.length === 1 && same((restored[0].args as { windows: unknown }).windows, [{ label: "w2", path: "/tmp/o.md" }]),
+    `calls=${JSON.stringify(restored)}`,
+  );
+  // 앱 종료(⌘Q)는 닫기 요청 없이 창이 사라진다 — 그 경로에서는 어떤 항목도 지우지 않는다.
+  window.dispatchEvent(new Event("pagehide"));
+  await wait(150);
+  check(
+    "S13",
+    "앱 종료 경로(닫기 요청 없이 끝남)는 모든 창 항목을 남긴다",
+    same(mainOf(), { paths: ["/tmp/a.md"], active: "/tmp/a.md" }) && !!otherOf(),
+    `session=${JSON.stringify(session())}`,
+  );
+  // 창 닫기 버튼(close-requested)이 통과하면 이 창 항목만 지워진다.
+  emitTauri("close-requested");
+  await waitFor(() => mainOf() === null);
+  check(
+    "S12",
+    "창 닫기 요청을 통과시키면 이 창 항목만 제거되고 다른 창 항목은 남는다",
+    mainOf() === null && same(otherOf(), { paths: ["/tmp/o.md"], active: "/tmp/o.md" }) && callsOf("allow_close").length === 1,
+    `session=${JSON.stringify(session())} allow_close=${callsOf("allow_close").length}`,
+  );
+}
+
+// 옛 단일 값 {paths, active}을 심고 시작한다.
+async function pageLegacy(): Promise<void> {
+  await waitFor(() => tabsOf().length === 3);
+  const raw = session() as { paths?: unknown; windows?: unknown } | null;
+  check(
+    "S11",
+    "옛 단일 값 {paths,active}은 main 창의 세션으로 읽혀 그대로 복원된다",
+    same(pathsOfTabs(), ["/tmp/a.md", "/tmp/b.md", "/tmp/c.md"]) && activeOf() === "/tmp/b.md",
+    `tabs=${JSON.stringify(pathsOfTabs())} active=${activeOf()}`,
+  );
+  check(
+    "S14",
+    "옛 값으로 복원한 뒤 다음 기록은 새 형식이다(최상위 paths 없이 windows.main)",
+    !!raw && raw.paths === undefined && same(mainOf(raw), { paths: ["/tmp/a.md", "/tmp/b.md", "/tmp/c.md"], active: "/tmp/b.md" }),
+    `session=${JSON.stringify(raw)}`,
+  );
 }
 
 async function pageRestore(): Promise<void> {
@@ -124,7 +211,7 @@ async function pageRestore(): Promise<void> {
   check(
     "S06",
     "복원이 끝나기 전에는 세션을 쓰지 않는다(복원 전체에서 쓰기 1회, 끝난 뒤 열린 탭과 일치)",
-    writes().length === 1 && same(JSON.parse(writes()[0] ?? "null"), expected),
+    writes().length === 1 && same(mainOf(JSON.parse(writes()[0] ?? "null")), expected),
     `writes=${writes().length} first=${writes()[0]}`,
   );
 }
@@ -135,7 +222,7 @@ async function pageToggleOff(): Promise<void> {
   check(
     "S03",
     "토글이 꺼져 있으면 복원하지 않고 빈 화면이다",
-    tabsOf().length === 0 && !!notice && !notice.hidden && same(session(), { paths: ["/tmp/a.md", "/tmp/b.md"], active: null }),
+    tabsOf().length === 0 && !!notice && !notice.hidden && same(mainOf(), { paths: ["/tmp/a.md", "/tmp/b.md"], active: null }),
     `tabs=${tabsOf().length} emptyVisible=${!!notice && !notice.hidden} session=${JSON.stringify(session())}`,
   );
 }
@@ -166,6 +253,9 @@ async function pageMissing(): Promise<void> {
 
 async function main(): Promise<void> {
   const files = Number(params.get("files") ?? 1);
+  if (params.has("closeWin")) return pageCloseWindow();
+  if (params.has("seedOther")) return pageMulti();
+  if (params.has("seedLegacy")) return pageLegacy();
   if (params.has("restore")) return pageToggleOff();
   if (params.has("missing")) return pageMissing();
   if (params.has("seedSession") && files === 0) return pageRestore();
