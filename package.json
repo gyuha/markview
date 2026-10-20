@@ -45,6 +45,7 @@
     "mermaid": "^12.1.0",
     "ot-json1": "^1.0.2",
     "ot-text-unicode": "^4.0.0",
+    "pele": "^1.6.0",
     "plantuml-encoder": "^1.4.0",
     "prismjs": "^1.30.0",
     "rxjs": "^7.8.2",

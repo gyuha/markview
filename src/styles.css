@@ -979,6 +979,17 @@ html[data-theme] .mu-editor .token.deleted {
   height: auto;
 }
 
+/* 편집 모드(Muya)가 그린 pele SVG에는 인라인 팔레트가 없다 — 앱 테마 변수를 대 준다. */
+.pele {
+  --pele-fg: var(--fg);
+  --pele-muted: var(--fg-muted);
+  --pele-line: var(--fg-muted);
+  --pele-surface: var(--code-bg);
+  --pele-surface-alt: var(--border);
+  --pele-border: var(--border);
+  --pele-accent: var(--link);
+}
+
 .mermaid-block.mermaid-failed {
   text-align: left;
 }

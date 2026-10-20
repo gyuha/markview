@@ -1,6 +1,7 @@
 import type { Palette } from "./theme";
 
 type MermaidApi = Awaited<typeof import("mermaid")>["default"];
+type PeleRender = Awaited<typeof import("pele")>["render"];
 
 let mermaidApi: MermaidApi | null = null;
 let initializedFor: string | null = null;
@@ -12,6 +13,35 @@ let idSeq = 0;
  * 원문이 그대로인 다이어그램을 다시 그리면 타이핑이 즉시 막힌다. 캐시가 그것을 막는다.
  */
 const svgCache = new Map<string, string>();
+
+let peleRender: PeleRender | null = null;
+
+/** pele는 SVG 자신의 인라인 스타일에서 `--pele-*`를 읽는다. 팔레트를 SVG에 직접 심어 테마 전환 때 다시 그리면 색이 바뀐다. */
+function peleVars(palette: Palette): string {
+  const m = palette.mermaid as Record<string, string>;
+  const vars: Record<string, string> = {
+    "--pele-bg": m.background,
+    "--pele-fg": m.textColor,
+    "--pele-muted": m.lineColor,
+    "--pele-line": m.lineColor,
+    "--pele-surface": m.primaryColor,
+    "--pele-surface-alt": m.secondaryColor,
+    "--pele-border": m.tertiaryBorderColor,
+    "--pele-accent": m.primaryBorderColor,
+  };
+  return Object.entries(vars)
+    .map(([k, v]) => `${k}:${v.toLowerCase()};`)
+    .join("");
+}
+
+/** pele로 그린다. pele가 지원하지 않거나 파싱에 실패하면 던진다 — 호출자가 mermaid로 폴백한다. */
+async function renderWithPele(source: string, palette: Palette): Promise<string> {
+  if (!peleRender) {
+    peleRender = (await import("pele")).render;
+  }
+  const { svg } = peleRender(source);
+  return svg.replace('style="', `style="${peleVars(palette)}`);
+}
 
 /** 번들을 실제로 mermaid가 필요한 순간까지 미룬다. */
 async function load(palette: Palette): Promise<MermaidApi> {
@@ -41,7 +71,7 @@ export async function renderMermaid(scope: HTMLElement, palette: Palette): Promi
   const blocks = Array.from(scope.querySelectorAll<HTMLElement>(".mermaid-block"));
   if (blocks.length === 0) return;
 
-  const mermaid = await load(palette);
+  let mermaid: MermaidApi | null = null;
 
   for (const block of blocks) {
     const source = block.dataset.mermaid ?? "";
@@ -52,8 +82,18 @@ export async function renderMermaid(scope: HTMLElement, palette: Palette): Promi
       block.innerHTML = cached;
       continue;
     }
+    try {
+      const svg = await renderWithPele(source, palette);
+      block.classList.remove("mermaid-failed");
+      block.innerHTML = svg;
+      svgCache.set(cacheKey, svg);
+      continue;
+    } catch {
+      // pele가 못 그리는 문법 — mermaid로 다시 시도한다.
+    }
     const id = `mermaid-${idSeq++}`;
     try {
+      mermaid ??= await load(palette);
       const { svg } = await mermaid.render(id, source);
       block.classList.remove("mermaid-failed");
       block.innerHTML = svg;
