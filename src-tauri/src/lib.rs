@@ -43,6 +43,13 @@ fn allow_close(window: tauri::WebviewWindow, guard: tauri::State<CloseGuard>) {
     guard.allow(window.label());
 }
 
+/// 호출한 창만 항상 위에 둔다(다른 창은 건드리지 않는다). 웹뷰에 창 권한을 주지 않고
+/// 이 커맨드로만 열어 둔다(ADR 261010-234732). 상태는 저장하지 않으므로 앱을 다시 켜면 꺼져 있다.
+#[tauri::command]
+fn set_always_on_top(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+    window.set_always_on_top(enabled).map_err(|e| e.to_string())
+}
+
 #[derive(serde::Serialize)]
 struct Document {
     path: String,
@@ -604,6 +611,7 @@ pub fn run() {
             write_markdown,
             take_pending_files,
             allow_close,
+            set_always_on_top,
             claim_file,
             release_file,
             take_window_init,

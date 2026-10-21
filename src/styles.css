@@ -310,6 +310,12 @@ html .editor-host ::selection {
   color: var(--fg);
 }
 
+/* 항상 위 버튼이 켜진 상태 — 테마와 무관하게 링크색으로 꺼진 상태와 구별한다. */
+.settings-button[aria-pressed="true"] {
+  color: var(--link);
+  border-color: var(--link);
+}
+
 .settings-button svg {
   width: 14px;
   height: 14px;

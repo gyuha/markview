@@ -896,6 +896,29 @@ async function reloadActive(): Promise<void> {
   }
 }
 
+/**
+ * 항상 위 버튼. 창마다 따로이고 저장하지 않는다(앱을 다시 켜면 꺼져 있다).
+ * IPC가 성공한 뒤에만 상태를 뒤집고, 진행 중 연타는 무시해 화면과 창의 실제 상태가 어긋나지 않게 한다.
+ */
+function installOnTopControl(): void {
+  const button = document.querySelector<HTMLElement>("#ontop-button");
+  if (!button) return;
+  let pending = false;
+  button.addEventListener("click", async () => {
+    if (pending) return;
+    pending = true;
+    const enabled = button.getAttribute("aria-pressed") !== "true";
+    try {
+      await invoke("set_always_on_top", { enabled });
+      button.setAttribute("aria-pressed", String(enabled));
+    } catch (e) {
+      notify(String(e));
+    } finally {
+      pending = false;
+    }
+  });
+}
+
 /** 세그먼트 컨트롤을 배선한다. 선택 테마를 고르는 컨트롤이며 실효 테마는 applyTheme가 유도한다. */
 function installThemeControl(): void {
   for (const button of document.querySelectorAll<HTMLElement>("#theme [data-choice]")) {
@@ -1181,6 +1204,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   installPopovers();
   syncToolbar();
   installThemeControl();
+  installOnTopControl();
 
   // 사용자 토글과 OS 변경이 같은 진입점으로 들어온다 — 한쪽만 mermaid 재렌더를 잊는 일이 없도록.
   onSystemChange(() => {
