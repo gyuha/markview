@@ -179,6 +179,40 @@ async function pageCloseWindow(): Promise<void> {
     mainOf() === null && same(otherOf(), { paths: ["/tmp/o.md"], active: "/tmp/o.md" }) && callsOf("allow_close").length === 1,
     `session=${JSON.stringify(session())} allow_close=${callsOf("allow_close").length}`,
   );
+  // 마지막 창을 직접 닫으면 먼저 닫은(분리했던) 창 항목은 모두 지우고, 이 창의 탭은 main 항목으로 남긴다.
+  const seed = (windows: Record<string, { paths: string[]; active: string | null }>) =>
+    localStorage.setItem("markview.session", JSON.stringify({ windows }));
+  const windowsOf = () => (session() as { windows?: Record<string, { paths: string[]; active: string | null }> } | null)?.windows ?? {};
+  const setLabel = (label: string) => {
+    (window as unknown as { __TAURI_INTERNALS__: { metadata: { currentWindow: { label: string } } } }).__TAURI_INTERNALS__.metadata.currentWindow.label = label;
+  };
+  seed({ main: { paths: ["/tmp/a.md"], active: "/tmp/a.md" }, w2: { paths: ["/tmp/o.md"], active: "/tmp/o.md" }, w3: { paths: ["/tmp/p.md"], active: null } });
+  (window as unknown as { __OTHER_WINDOWS__: number }).__OTHER_WINDOWS__ = 0;
+  emitTauri("close-requested");
+  await waitFor(() => Object.keys(windowsOf()).length === 1);
+  check(
+    "S15",
+    "마지막 창을 직접 닫으면 먼저 닫은(분리했던) 창 항목은 모두 지워져 다음 실행에서 되살릴 창이 없고 이 창의 탭은 남는다",
+    same(windowsOf(), { main: { paths: ["/tmp/a.md"], active: "/tmp/a.md" } }) && readOtherWindowsFromStorage().length === 0,
+    `session=${JSON.stringify(session())}`,
+  );
+  // 분리했던 창(w2)을 마지막으로 닫아도 그 창의 탭이 main 항목으로 남아 다음 실행에서 main 창이 되살린다.
+  setLabel("w2");
+  seed({ main: { paths: ["/tmp/stale.md"], active: null }, w2: { paths: ["/tmp/x.md", "/tmp/y.md"], active: "/tmp/y.md" } });
+  emitTauri("close-requested");
+  await waitFor(() => windowsOf().w2 === undefined);
+  check(
+    "S16",
+    "분리했던 창을 마지막으로 닫으면 그 창의 탭이 main 항목으로 남고 다른 항목은 지워진다",
+    same(windowsOf(), { main: { paths: ["/tmp/x.md", "/tmp/y.md"], active: "/tmp/y.md" } }),
+    `session=${JSON.stringify(session())}`,
+  );
+  setLabel("main");
+}
+
+function readOtherWindowsFromStorage(): string[] {
+  const windows = (session() as { windows?: Record<string, { paths: string[] }> } | null)?.windows ?? {};
+  return Object.entries(windows).filter(([label, s]) => label !== "main" && s.paths.length > 0).map(([label]) => label);
 }
 
 // 옛 단일 값 {paths, active}을 심고 시작한다.

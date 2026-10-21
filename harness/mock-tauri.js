@@ -80,6 +80,8 @@
       // 다중 창 소유 모킹. window.__OTHER_OWNED__(경로 배열)에 든 경로는 다른 창(w2)이 쥔 것으로 답한다.
       if (cmd === "claim_file") return (window.__OTHER_OWNED__ ?? []).includes(args?.path) ? { "other-window": "w2" } : "granted";
       if (cmd === "release_file") return null;
+      // 다른 창 수. 기본은 1(마지막 창이 아님)이고, window.__OTHER_WINDOWS__ = 0 이면 마지막 창이다.
+      if (cmd === "other_window_count") return window.__OTHER_WINDOWS__ ?? 1;
       // 저장 모킹. 충돌 없이 성공한다.
       if (cmd === "write_markdown") return { conflict: false, mtime_ms: 1 };
       // 분리 모킹. window.__DETACH_FAIL__ 이면 거절하고, 아니면 Rust처럼 "merged"/"detached"를 돌려준다

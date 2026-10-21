@@ -67,6 +67,20 @@ export function removeSession(label: string): void {
   writeAll(windows);
 }
 
+/** 모든 창의 항목을 지운다 — 마지막 창을 직접 닫았으면 다음 실행에서 복원할 창이 없다. */
+export function removeAllSessions(): void {
+  writeAll({});
+}
+
+/**
+ * 마지막 창을 닫을 때 쓴다 — 그 창의 탭만 main 항목으로 남기고 나머지 창 항목은 모두 지운다.
+ * 다음 실행은 main 창 하나로 마지막에 닫은 창의 탭을 되살리고, 먼저 닫은 창은 되살리지 않는다.
+ */
+export function keepLastWindowAsMain(label: string): void {
+  const entry = readAll()[label];
+  writeAll(entry && entry.paths.length > 0 ? { [MAIN_LABEL]: entry } : {});
+}
+
 /** 되살릴 창 — main 아닌 항목 중 열 탭이 있는 것. 시작 경로는 활성 탭(없으면 첫 탭)이다. */
 export function readOtherWindows(): { label: string; path: string }[] {
   return Object.entries(readAll())

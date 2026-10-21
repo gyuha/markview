@@ -43,6 +43,13 @@ fn allow_close(window: tauri::WebviewWindow, guard: tauri::State<CloseGuard>) {
     guard.allow(window.label());
 }
 
+/// 이 창 말고 열려 있는 창의 수. 직접 닫는 창이 마지막인지 프론트엔드가 판단하는 데 쓴다 —
+/// 마지막 창을 닫으면 다음 실행에서 분리했던 창이 되살아나지 않도록 모든 창의 세션을 지운다.
+#[tauri::command]
+fn other_window_count(app: AppHandle, window: tauri::WebviewWindow) -> usize {
+    app.webview_windows().keys().filter(|label| label.as_str() != window.label()).count()
+}
+
 /// 호출한 창만 항상 위에 둔다(다른 창은 건드리지 않는다). 웹뷰에 창 권한을 주지 않고
 /// 이 커맨드로만 열어 둔다(ADR 261010-234732). 상태는 저장하지 않으므로 앱을 다시 켜면 꺼져 있다.
 #[tauri::command]
@@ -612,6 +619,7 @@ pub fn run() {
             take_pending_files,
             allow_close,
             set_always_on_top,
+            other_window_count,
             claim_file,
             release_file,
             take_window_init,

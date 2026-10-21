@@ -12,7 +12,7 @@ import { confirmDialog } from "./modal";
 import { openRecentDialog, recordRecent } from "./recent";
 import { dropAction, insertIndex, type DropAction } from "./tabDetach";
 import { applyDocWidth, isDocWidthStorageKey, readDocWidth } from "./docWidth";
-import { readOtherWindows, readRestoreSession, readSession, removeSession, saveSession, type Session } from "./session";
+import { readOtherWindows, readRestoreSession, readSession, keepLastWindowAsMain, removeAllSessions, removeSession, saveSession, type Session } from "./session";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { MuyaEditor, MuyaHost } from "./muya";
@@ -125,6 +125,20 @@ function notify(message: string): void {
 
 function findTab(path: string): Tab | undefined {
   return tabs.find((t) => t.path === path);
+}
+
+/**
+ * 직접 닫는 창의 세션을 정리한다. 다른 창이 열려 있으면 이 창 항목만 지운다.
+ * 마지막 창이면 먼저 닫은 창(분리했던 창)의 항목은 모두 지워 다시 켰을 때 되살아나지 않게 하고,
+ * 이 창의 탭은 main 항목으로 남긴다(`keepTabs`) — 마지막 탭을 닫아 비운 창은 남길 것이 없다.
+ * 창 수를 알 수 없으면 이 창 항목만 지운다.
+ */
+async function forgetClosingWindow(keepTabs: boolean): Promise<void> {
+  const label = getCurrentWindow().label;
+  const others = await invoke<number | null>("other_window_count").catch(() => null);
+  if (others !== 0) removeSession(label);
+  else if (keepTabs) keepLastWindowAsMain(label);
+  else removeAllSessions();
 }
 
 /** 복원 중에는 쓰지 않는다 — 도중에 중단돼도 앞선 세션을 부분 상태로 덮지 않는다. */
@@ -559,9 +573,8 @@ function closeTab(path: string): void {
   void invoke("release_file", { path });
   // 마지막 문서를 닫으면 빈 화면을 남기지 않고 창을 닫는다 (Safari·Chrome과 같은 동작).
   if (tabs.length === 1) {
-    // 마지막 탭을 직접 닫은 것이므로 이 창은 다음 실행에서 복원할 것이 없다(다른 창 항목은 둔다).
-    removeSession(getCurrentWindow().label);
-    void getCurrentWindow().close();
+    // 마지막 탭을 직접 닫은 것이므로 이 창은 다음 실행에서 복원할 것이 없다(다른 창이 열려 있으면 그 항목은 둔다).
+    void forgetClosingWindow(false).then(() => getCurrentWindow().close());
     return;
   }
   const [tab] = tabs.splice(index, 1);
@@ -1370,8 +1383,9 @@ async function requestCloseWindow(): Promise<void> {
   for (const tab of tabs) markDirty(tab, false);
   // Rust가 다음 닫기 요청 한 번을 통과시키도록 알린다 — 그러지 않으면 다시 막힌다.
   await invoke("allow_close");
-  // 닫기 버튼으로 직접 닫은 창은 다음 실행에서 복원하지 않는다 — 앱 종료(⌘Q)는 이 경로를 거치지 않아 항목이 남는다.
-  removeSession(getCurrentWindow().label);
+  // 닫기 버튼으로 직접 닫은 창은 다음 실행에서 복원하지 않는다. 마지막 창이면 그 창의 탭만 main으로 남기고
+  // 나머지 창 항목은 지운다 — 앱 종료(⌘Q)는 이 경로를 거치지 않아 모든 항목이 남는다.
+  await forgetClosingWindow(true);
   await getCurrentWindow().close();
 }
 
