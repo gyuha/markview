@@ -16,6 +16,8 @@ use std::os::unix::process::CommandExt;
 
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::provider::{self, ProviderSetting, Settings};
+
 /// 사본 파일 이름. 에이전트 프롬프트와 결과 읽기가 같은 이름을 쓴다.
 const FILE_NAME: &str = "document.md";
 /// 사본으로 넘기거나 받을 수 있는 최대 크기. `read_markdown`의 상한과 같다.
@@ -63,27 +65,36 @@ pub fn build_prompt(instruction: &str) -> String {
     )
 }
 
-pub fn build_invocation(preset_id: &str, prompt: &str, workdir: &Path) -> Option<Invocation> {
+/// `model`은 `provider::validate_model`을 통과한 값이어야 한다(옵션처럼 읽히는 값은 거기서 걸러진다).
+/// 모델 인자는 프롬프트 앞에 두고, 모델이 없으면 인자를 더하지 않는다.
+pub fn build_invocation(preset_id: &str, prompt: &str, workdir: &Path, model: Option<&str>) -> Option<Invocation> {
     let s = |v: &str| v.to_string();
     let dir = workdir.to_string_lossy().into_owned();
+    let with_model = |flag: &str| -> Vec<String> { model.map(|m| vec![s(flag), s(m)]).unwrap_or_default() };
     let (args, env) = match preset_id {
         // 도구를 읽기·편집·쓰기로 줄이고, 프롬프트가 필요한 요청은 묻지 않고 거부한다.
         "claude" => (
-            vec![
-                s("--permission-mode"), s("acceptEdits"), s("--permission-prompts"), s("none"),
-                s("--tools"), s("Read,Edit,Write"), s("-p"), s(prompt),
-            ],
+            [
+                with_model("--model"),
+                vec![
+                    s("--permission-mode"), s("acceptEdits"), s("--permission-prompts"), s("none"),
+                    s("--tools"), s("Read,Edit,Write"), s("-p"), s(prompt),
+                ],
+            ]
+            .concat(),
             vec![],
         ),
         "codex" => (
-            vec![
-                s("exec"), s("--sandbox"), s("workspace-write"), s("--skip-git-repo-check"), s("--ephemeral"),
-                s("--color"), s("never"), s("-C"), dir, s(prompt),
-            ],
+            [
+                vec![s("exec"), s("--sandbox"), s("workspace-write"), s("--skip-git-repo-check"), s("--ephemeral")],
+                with_model("-m"),
+                vec![s("--color"), s("never"), s("-C"), dir, s(prompt)],
+            ]
+            .concat(),
             vec![],
         ),
         "opencode" => (
-            vec![s("run"), s("--dir"), dir, s(prompt)],
+            [vec![s("run")], with_model("-m"), vec![s("--dir"), dir, s(prompt)]].concat(),
             vec![(
                 s("OPENCODE_CONFIG_CONTENT"),
                 s(r#"{"permission":{"edit":"allow","bash":"deny","webfetch":"deny"}}"#),
@@ -106,14 +117,13 @@ fn parse_marked_path(output: &str) -> Option<String> {
 /// 로그인 셸이 만드는 PATH. GUI 앱은 셸 PATH를 상속하지 않고 mise·nvm 같은 도구는 셸 시작 파일에서
 /// PATH를 만든다. 시작 파일(.zshrc)까지 읽도록 `-i`를 쓰고 stdin은 닫는다.
 fn login_shell_path(shell: &Path, timeout: Duration) -> Option<String> {
-    let mut child = Command::new(shell)
-        .args(["-ilc", &format!("printf '{PATH_BEGIN}%s{PATH_END}' \"$PATH\"")])
+    let mut cmd = Command::new(shell);
+    cmd.args(["-ilc", &format!("printf '{PATH_BEGIN}%s{PATH_END}' \"$PATH\"")])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::null());
+    detach_session(&mut cmd);
+    let mut child = cmd.spawn().ok()?;
     let mut out = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         let mut buf = Vec::new();
@@ -214,6 +224,17 @@ fn user_shell() -> PathBuf {
     std::env::var_os("SHELL").map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| "/bin/zsh".into())
 }
 
+/// 로그인 셸에서 읽은 PATH를 우선하고, 앱 프로세스가 물려받은 PATH도 뒤에 덧붙여
+/// 로그인 셸 호출이 실패하거나 비어 있어도 기본 PATH 탐색이 살아 있게 한다.
+fn effective_path(login: Option<String>, inherited: Option<String>) -> String {
+    match (login.filter(|s| !s.is_empty()), inherited.filter(|s| !s.is_empty())) {
+        (Some(l), Some(i)) => format!("{l}:{i}"),
+        (Some(l), None) => l,
+        (None, Some(i)) => i,
+        (None, None) => String::new(),
+    }
+}
+
 // ---- 실행 -------------------------------------------------------------------
 
 #[derive(Debug, PartialEq)]
@@ -262,8 +283,24 @@ impl Drop for WorkDir {
     }
 }
 
+/// 새 세션(자신이 리더인 새 프로세스 그룹)에서 자식을 띄운다.
+/// `process_group(0)`(`setpgid`)만 쓰면 부모의 제어 터미널(`/dev/tty`)이 그대로 물려 내려가서,
+/// 터미널에서 띄운 앱이 `zsh -i`를 부를 때 백그라운드 그룹의 터미널 접근(`SIGTTOU`/`SIGTTIN`)으로 멈춘다.
+/// `setsid`는 제어 터미널을 떼어 내면서 동시에 `pgid == pid`인 프로세스 그룹을 만들어 `kill_group`도 그대로 동작한다.
+pub(crate) fn detach_session(cmd: &mut Command) {
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+}
+
 /// 프로세스 그룹 전체를 죽인다. 에이전트가 띄운 자손도 같이 끝낸다.
-fn kill_group(child: &mut Child) {
+pub(crate) fn kill_group(child: &mut Child) {
     unsafe {
         libc::killpg(child.id() as i32, libc::SIGKILL);
     }
@@ -309,8 +346,8 @@ pub fn run_in_workdir(
         .env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stderr(Stdio::piped());
+    detach_session(&mut cmd);
     if let Some(p) = path_env {
         cmd.env("PATH", p);
     }
@@ -357,6 +394,48 @@ pub fn run_in_workdir(
     String::from_utf8(bytes).map_err(|_| AgentError::Failed("결과가 UTF-8 텍스트가 아닙니다".into()))
 }
 
+// ---- 연결 시험 --------------------------------------------------------------
+
+const DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(15);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(180);
+const PROBE_DOC: &str = "# 연결 시험\n";
+const PROBE_MARK: &str = "연결 확인";
+const PROBE_INSTRUCTION: &str = "문서 맨 끝에 `- 연결 확인` 한 줄을 덧붙여 줘.";
+
+/// 작은 실제 호출로 이 프로바이더가 쓸 수 있는지 본다. 실패하면 CLI가 마지막으로 낸 줄을 오류에 붙인다 —
+/// 로그인이 안 됐거나 계정 문제일 때 그 이유가 거기 있다.
+fn probe_provider(
+    program: &Path,
+    path_env: Option<&str>,
+    make_invocation: impl FnOnce(&Path) -> Invocation,
+    timeout: Duration,
+) -> Result<String, String> {
+    let last = Arc::new(Mutex::new(String::new()));
+    let sink = last.clone();
+    let started = Instant::now();
+    let out = run_in_workdir(
+        program,
+        path_env,
+        make_invocation,
+        PROBE_DOC,
+        &AtomicBool::new(false),
+        timeout,
+        Arc::new(move |_, line| {
+            if !line.trim().is_empty() {
+                *sink.lock().unwrap() = line;
+            }
+        }),
+    );
+    match out {
+        Ok(text) if text != PROBE_DOC && text.contains(PROBE_MARK) => Ok(format!("OK ({}초)", started.elapsed().as_secs())),
+        Ok(_) => Err("에이전트가 문서를 고치지 않았습니다".into()),
+        Err(e) => {
+            let last = last.lock().unwrap().clone();
+            Err(if last.is_empty() { e.message() } else { format!("{} — {last}", e.message()) })
+        }
+    }
+}
+
 // ---- IPC --------------------------------------------------------------------
 
 /// 창 라벨 + 탭 경로가 한 실행의 키다. 같은 키의 두 번째 실행은 막고 다른 탭·창은 독립으로 돌린다.
@@ -372,6 +451,9 @@ pub struct AgentState {
     /// 사용자가 설정 창에서 지정한 실행 파일 경로. 앱 설정 폴더의 `agent-paths.json`에 저장된다.
     overrides: Mutex<Overrides>,
     config_file: Mutex<Option<PathBuf>>,
+    /// 프로바이더별 활성·모델. 앱 설정 폴더의 `agent-providers.json`에 저장된다.
+    providers: Mutex<Settings>,
+    providers_file: Mutex<Option<PathBuf>>,
 }
 
 impl AgentState {
@@ -405,16 +487,61 @@ impl AgentState {
         }
     }
 
+    /// 프로바이더 설정 파일을 정하고 거기 있던 설정을 불러온다. 처음 한 번만 한다.
+    fn use_providers_file(&self, file: PathBuf) {
+        let mut slot = self.providers_file.lock().unwrap();
+        if slot.is_none() {
+            let known: Vec<&str> = PRESETS.iter().map(|p| p.id).collect();
+            *self.providers.lock().unwrap() = provider::load_settings(&file, &known);
+            *slot = Some(file);
+        }
+    }
+
     fn init(&self, app: &AppHandle) {
         if let Ok(dir) = app.path().app_config_dir() {
             self.use_config_file(dir.join("agent-paths.json"));
+            self.use_providers_file(dir.join("agent-providers.json"));
+        }
+    }
+
+    /// 프로바이더의 설정. 저장한 적이 없으면 기본값(켜짐, 모델 지정 없음).
+    fn provider(&self, preset_id: &str) -> ProviderSetting {
+        self.providers.lock().unwrap().get(preset_id).cloned().unwrap_or_default()
+    }
+
+    /// 활성 여부와 모델을 바꾼다. `None`인 항목은 그대로 둔다. 모델은 빈 문자열이면 지정을 지운다.
+    /// 검증을 통과하지 못하면 아무것도 바꾸지 않는다.
+    fn set_provider(&self, preset_id: &str, enabled: Option<bool>, model: Option<&str>) -> Result<ProviderSetting, String> {
+        let id = find_preset(preset_id).ok_or("알 수 없는 에이전트입니다")?.id;
+        let mut next = self.providers.lock().unwrap().clone();
+        let mut setting = next.get(id).cloned().unwrap_or_default();
+        if let Some(on) = enabled {
+            setting.enabled = on;
+        }
+        if let Some(raw) = model {
+            setting.model = provider::validate_model(raw)?;
+        }
+        next.insert(id.to_string(), setting.clone());
+        if let Some(file) = self.providers_file.lock().unwrap().as_ref() {
+            provider::save_settings(file, &next).map_err(|e| format!("저장하지 못했습니다: {e}"))?;
+        }
+        *self.providers.lock().unwrap() = next;
+        Ok(setting)
+    }
+
+    /// 꺼진 프로바이더는 실행하지 않는다.
+    fn ensure_enabled(&self, preset_id: &str) -> Result<(), String> {
+        if self.provider(preset_id).enabled {
+            Ok(())
+        } else {
+            Err("이 프로바이더는 설정에서 꺼져 있습니다".into())
         }
     }
 
     fn cache(&self, refresh: bool) -> AgentCache {
         let mut guard = self.cache.lock().unwrap();
         if refresh || guard.is_none() {
-            let shell_path = login_shell_path(&user_shell(), SHELL_TIMEOUT).unwrap_or_default();
+            let shell_path = effective_path(login_shell_path(&user_shell(), SHELL_TIMEOUT), std::env::var("PATH").ok());
             *guard = Some(detect(shell_path, &self.overrides.lock().unwrap()));
         }
         guard.clone().expect("just set")
@@ -447,6 +574,10 @@ pub struct DetectedAgent {
     name: &'static str,
     /// 찾은 실행 파일 경로. 못 찾았으면 `None`.
     path: Option<String>,
+    /// 설정 창에서 켜 둔 프로바이더인가(기본 켜짐).
+    enabled: bool,
+    /// 설정 창에서 정한 모델. 없으면 CLI 자신의 설정을 따른다.
+    model: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -459,19 +590,26 @@ struct AgentLog {
 /// 프리셋 3개의 탐색 결과. `refresh`면 로그인 셸에서 PATH를 다시 읽는다.
 #[tauri::command]
 pub async fn detect_agents(app: AppHandle, refresh: Option<bool>) -> Result<Vec<DetectedAgent>, String> {
+    let (cache, state_app) = (app.clone(), app);
     let cache = tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AgentState>();
-        state.init(&app);
+        let state = cache.state::<AgentState>();
+        state.init(&cache);
         state.cache(refresh.unwrap_or(false))
     })
     .await
     .map_err(|e| e.to_string())?;
+    let state = state_app.state::<AgentState>();
     Ok(PRESETS
         .iter()
-        .map(|p| DetectedAgent {
-            id: p.id,
-            name: p.name,
-            path: cache.found.get(p.id).map(|f| f.to_string_lossy().into_owned()),
+        .map(|p| {
+            let setting = state.provider(p.id);
+            DetectedAgent {
+                id: p.id,
+                name: p.name,
+                path: cache.found.get(p.id).map(|f| f.to_string_lossy().into_owned()),
+                enabled: setting.enabled,
+                model: setting.model,
+            }
         })
         .collect())
 }
@@ -502,6 +640,11 @@ pub async fn run_agent(
     path: String,
 ) -> Result<String, String> {
     validate_request(&preset, &prompt)?;
+    {
+        let state = app.state::<AgentState>();
+        state.init(&app);
+        state.ensure_enabled(&preset)?;
+    }
     let label = window.label().to_string();
     let key = run_key(&label, &path);
     let cancel = app.state::<AgentState>().begin(&key).ok_or("이 탭에서 이미 실행 중입니다")?;
@@ -515,6 +658,7 @@ pub async fn run_agent(
             "이 에이전트의 실행 파일을 찾지 못했습니다".into(),
         ))?;
         let full_prompt = build_prompt(&prompt);
+        let model = state.provider(&preset).model;
         let emit_app = task_app.clone();
         let on_line: Arc<dyn Fn(Stream, String) + Send + Sync> = Arc::new(move |stream, line| {
             let payload = AgentLog {
@@ -527,7 +671,7 @@ pub async fn run_agent(
         run_in_workdir(
             &program,
             (!cache.shell_path.is_empty()).then_some(cache.shell_path.as_str()),
-            |dir| build_invocation(&preset, &full_prompt, dir).expect("preset checked"),
+            |dir| build_invocation(&preset, &full_prompt, dir, model.as_deref()).expect("preset checked"),
             &text,
             &cancel,
             RUN_TIMEOUT,
@@ -541,6 +685,69 @@ pub async fn run_agent(
         Ok(Err(e)) => Err(e.message()),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// 설정 창의 프로바이더 설정. `enabled`·`model` 중 넘긴 것만 바꾼다. 모델은 빈 문자열이면 지정을 지운다.
+/// 모델 값은 여기서 다시 검증한다 — 웹뷰가 넘긴 값을 믿지 않는다.
+#[tauri::command]
+pub fn set_provider_settings(
+    app: AppHandle,
+    state: tauri::State<AgentState>,
+    preset: String,
+    enabled: Option<bool>,
+    model: Option<String>,
+) -> Result<(), String> {
+    state.init(&app);
+    state.set_provider(&preset, enabled, model.as_deref()).map(|_| ())
+}
+
+/// 이 프로바이더 CLI에 `--version`만 돌려 설치 상태를 본다(모델 호출 없음).
+#[tauri::command]
+pub async fn provider_diagnostic(app: AppHandle, preset: String) -> Result<provider::Diagnostic, String> {
+    if find_preset(&preset).is_none() {
+        return Err("알 수 없는 에이전트입니다".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AgentState>();
+        state.init(&app);
+        let cache = state.cache(false);
+        provider::diagnose(
+            cache.found.get(preset.as_str()).map(PathBuf::as_path),
+            (!cache.shell_path.is_empty()).then_some(cache.shell_path.as_str()),
+            DIAGNOSTIC_TIMEOUT,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// 연결 시험 — 임시 사본에 한 줄을 덧붙이는 작은 실제 호출. 사용자가 눌렀을 때만 부른다.
+/// 꺼진 프로바이더도 시험할 수 있다(켜기 전에 되는지 보려는 것이다).
+#[tauri::command]
+pub async fn test_provider(app: AppHandle, window: tauri::WebviewWindow, preset: String) -> Result<String, String> {
+    if find_preset(&preset).is_none() {
+        return Err("알 수 없는 에이전트입니다".into());
+    }
+    let key = run_key(window.label(), &format!("provider-test:{preset}"));
+    app.state::<AgentState>().begin(&key).ok_or("이미 시험 중입니다")?;
+    let task_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let state = task_app.state::<AgentState>();
+        state.init(&task_app);
+        let cache = state.cache(false);
+        let program = cache.found.get(preset.as_str()).cloned().ok_or("이 에이전트의 실행 파일을 찾지 못했습니다")?;
+        let model = state.provider(&preset).model;
+        let prompt = build_prompt(PROBE_INSTRUCTION);
+        probe_provider(
+            &program,
+            (!cache.shell_path.is_empty()).then_some(cache.shell_path.as_str()),
+            |dir| build_invocation(&preset, &prompt, dir, model.as_deref()).expect("preset checked"),
+            PROBE_TIMEOUT,
+        )
+    })
+    .await;
+    app.state::<AgentState>().end(&key);
+    result.map_err(|e| e.to_string())?
 }
 
 /// 설정 창의 수동 경로. 파일명이 프리셋 실행 파일 이름과 같은 실행 파일만 받고, 빈 문자열은 지정을 지운다.
@@ -600,7 +807,7 @@ mod tests {
     fn agent_invocation_ends_with_prompt_and_never_asks_for_full_access() {
         let dir = Path::new("/tmp/mv-x");
         for p in PRESETS.iter() {
-            let inv = build_invocation(p.id, "PROMPT", dir).unwrap();
+            let inv = build_invocation(p.id, "PROMPT", dir, None).unwrap();
             assert_eq!(inv.args.last().map(String::as_str), Some("PROMPT"), "{}", p.id);
             for a in &inv.args {
                 for bad in ["dangerously", "yolo", "danger-full-access", "bypass", "skip-permissions"] {
@@ -609,19 +816,19 @@ mod tests {
                 assert_ne!(a, "--auto", "{}", p.id);
             }
         }
-        assert!(build_invocation("sh", "x", dir).is_none());
+        assert!(build_invocation("sh", "x", dir, None).is_none());
     }
 
     #[test]
     fn agent_invocation_pins_each_cli_to_the_workdir_or_its_edit_tools() {
         let dir = Path::new("/tmp/mv-x");
-        let args = |id: &str| build_invocation(id, "P", dir).unwrap().args.join(" ");
+        let args = |id: &str| build_invocation(id, "P", dir, None).unwrap().args.join(" ");
         assert!(args("claude").contains("--tools Read,Edit,Write"));
         assert!(args("claude").contains("--permission-prompts none"));
         assert!(args("codex").contains("--sandbox workspace-write"));
         assert!(args("codex").contains("-C /tmp/mv-x"));
         assert!(args("opencode").contains("--dir /tmp/mv-x"));
-        let env = build_invocation("opencode", "P", dir).unwrap().env;
+        let env = build_invocation("opencode", "P", dir, None).unwrap().env;
         assert!(env.iter().any(|(k, v)| k == "OPENCODE_CONFIG_CONTENT" && v.contains(r#""bash":"deny""#)));
     }
 
@@ -655,6 +862,16 @@ mod tests {
         let t = Instant::now();
         assert_eq!(login_shell_path(&sh, Duration::from_millis(300)), None);
         assert!(t.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn agent_login_shell_path_reads_real_zsh_without_stopping_on_tty() {
+        let path = login_shell_path(Path::new("/bin/zsh"), SHELL_TIMEOUT).expect("zsh -ilc PATH");
+        assert!(!path.is_empty());
+        assert_eq!(effective_path(Some("/a".into()), Some("/b".into())), "/a:/b");
+        assert_eq!(effective_path(None, Some("/b".into())), "/b");
+        assert_eq!(effective_path(Some(String::new()), Some("/b".into())), "/b");
+        assert_eq!(effective_path(Some("/a".into()), None), "/a");
     }
 
     #[test]
@@ -843,7 +1060,7 @@ mod tests {
             let out = run_in_workdir(
                 program,
                 Some(cache.shell_path.as_str()),
-                |d| build_invocation(p.id, &prompt, d).unwrap(),
+                |d| build_invocation(p.id, &prompt, d, None).unwrap(),
                 "# 제목\n\n본문\n",
                 &AtomicBool::new(false),
                 Duration::from_secs(300),
@@ -941,6 +1158,129 @@ mod tests {
         std::fs::write(&file, "{ not json").unwrap();
         assert!(load_overrides(&file).is_empty());
         assert!(load_overrides(&w.0.join("none.json")).is_empty());
+    }
+
+    // ---- 프로바이더 설정 ----
+
+    #[test]
+    fn agent_provider_model_flag_per_cli() {
+        let dir = Path::new("/tmp/mv-x");
+        let args = |id: &str, model: Option<&str>| build_invocation(id, "PROMPT", dir, model).unwrap().args;
+        // 모델이 있으면 CLI마다 정해진 인자가 프롬프트 앞에 들어가고, 마지막 인자는 여전히 프롬프트다.
+        for (id, flag) in [("claude", "--model"), ("codex", "-m"), ("opencode", "-m")] {
+            let with = args(id, Some("MODEL"));
+            let at = with.iter().position(|a| a == flag).unwrap_or_else(|| panic!("{id}에 {flag}가 없다: {with:?}"));
+            assert_eq!(with[at + 1], "MODEL", "{id}");
+            assert_eq!(with.iter().filter(|a| a.as_str() == "MODEL").count(), 1, "{id}: 모델은 한 번만");
+            assert_eq!(with.last().map(String::as_str), Some("PROMPT"), "{id}: 프롬프트가 마지막이어야 한다");
+            assert!(at + 1 < with.len() - 1, "{id}: 모델이 프롬프트 앞이어야 한다");
+            // 모델이 없으면 인자를 더하지 않는다 — 모델을 넣고 뺀 것의 차이가 정확히 두 개다.
+            let without = args(id, None);
+            assert_eq!(with.len(), without.len() + 2, "{id}");
+            let mut stripped = with.clone();
+            stripped.drain(at..at + 2);
+            assert_eq!(stripped, without, "{id}: 모델 두 인자를 빼면 모델 없는 인자와 같아야 한다");
+        }
+    }
+
+    #[test]
+    fn agent_provider_disabled_blocks_run() {
+        let w = scratch("disabled");
+        let st = AgentState::default();
+        st.use_providers_file(w.0.join("p.json"));
+        assert!(st.ensure_enabled("claude").is_ok(), "기본은 켜짐");
+        st.set_provider("claude", Some(false), None).unwrap();
+        assert!(st.ensure_enabled("claude").unwrap_err().contains("꺼져"));
+        assert!(st.ensure_enabled("codex").is_ok(), "다른 프로바이더는 그대로");
+        // 모델만 바꿔도 활성 여부는 유지된다.
+        st.set_provider("claude", None, Some("haiku")).unwrap();
+        assert!(st.ensure_enabled("claude").is_err());
+        assert_eq!(st.provider("claude").model.as_deref(), Some("haiku"));
+        st.set_provider("claude", Some(true), None).unwrap();
+        assert!(st.ensure_enabled("claude").is_ok());
+        assert_eq!(st.provider("claude").model.as_deref(), Some("haiku"), "켜도 모델은 남는다");
+    }
+
+    #[test]
+    fn agent_provider_settings_persist_and_reject_without_side_effects() {
+        let w = scratch("providers");
+        let file = w.0.join("cfg").join("agent-providers.json");
+        let first = AgentState::default();
+        first.use_providers_file(file.clone());
+        first.set_provider("codex", Some(false), Some("gpt-x")).unwrap();
+        let saved = std::fs::read_to_string(&file).unwrap();
+
+        // 거부는 메모리도 파일도 바꾸지 않는다.
+        for (id, enabled, model) in [("codex", None, Some("--yolo")), ("codex", Some(true), Some("a b")), ("nope", Some(true), None)] {
+            assert!(first.set_provider(id, enabled, model).is_err(), "{id} {model:?}");
+        }
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), saved);
+        assert!(!first.provider("codex").enabled, "거부된 요청의 enabled가 반영되면 안 된다");
+
+        // 앱을 다시 켠 것처럼 새 상태가 같은 파일을 읽는다.
+        let second = AgentState::default();
+        second.use_providers_file(file);
+        assert_eq!(second.provider("codex"), ProviderSetting { enabled: false, model: Some("gpt-x".into()) });
+        assert_eq!(second.provider("claude"), ProviderSetting::default());
+        // 모델을 빈 문자열로 지우면 지정이 없어진다.
+        second.set_provider("codex", None, Some("")).unwrap();
+        assert_eq!(second.provider("codex").model, None);
+    }
+
+    #[test]
+    fn agent_provider_test_reports_failure() {
+        let w = scratch("probe");
+        let ok = script(&w.0, "okcli", "printf -- '- 연결 확인\\n' >> document.md");
+        let r = probe_provider(&ok, None, |_| Invocation { args: vec![], env: vec![] }, Duration::from_secs(10));
+        assert!(r.as_ref().is_ok_and(|m| m.starts_with("OK")), "{r:?}");
+
+        // 실패하면 CLI가 마지막으로 낸 줄이 이유로 붙는다.
+        let login = script(&w.0, "logincli", "echo 'starting' >&2\necho '로그인이 필요합니다' >&2\nexit 1");
+        let e = probe_provider(&login, None, |_| Invocation { args: vec![], env: vec![] }, Duration::from_secs(10)).unwrap_err();
+        assert!(e.contains("로그인이 필요합니다"), "{e}");
+
+        // 문서를 고치지 않은 성공도 성공이 아니다.
+        let lazy = script(&w.0, "lazycli", "true");
+        assert!(probe_provider(&lazy, None, |_| Invocation { args: vec![], env: vec![] }, Duration::from_secs(10)).is_err());
+
+        // 오래 걸리면 중단하고 시간 초과를 알린다.
+        let slow = script(&w.0, "slowcli", "sleep 30");
+        let t = Instant::now();
+        let e = probe_provider(&slow, None, |_| Invocation { args: vec![], env: vec![] }, Duration::from_millis(300)).unwrap_err();
+        assert!(e.contains("끝나지 않아"), "{e}");
+        assert!(t.elapsed() < Duration::from_secs(10));
+    }
+
+    /// 실제 CLI에 모델을 지정해 한 번씩 왕복한다. 요금과 시간이 들어서 기본 실행에서는 빠진다:
+    /// `cargo test --manifest-path src-tauri/Cargo.toml agent_real_model -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn agent_real_model_flag_roundtrip() {
+        let cache = detect(login_shell_path(&user_shell(), SHELL_TIMEOUT).unwrap_or_default(), &Overrides::new());
+        let path_env = Some(cache.shell_path.as_str());
+        let codex_model = std::fs::read_to_string(std::env::var("HOME").map(|h| format!("{h}/.codex/config.toml")).unwrap_or_default())
+            .ok()
+            .and_then(|t| t.lines().find_map(|l| l.trim().strip_prefix("model = \"").and_then(|r| r.strip_suffix('"')).map(str::to_string)));
+        let opencode_model = cache.found.get("opencode").and_then(|bin| {
+            let out = Command::new(bin).arg("models").env("PATH", cache.shell_path.as_str()).output().ok()?;
+            String::from_utf8_lossy(&out.stdout).lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string)
+        });
+        let models: [(&str, Option<String>); 3] = [("claude", Some("haiku".into())), ("codex", codex_model), ("opencode", opencode_model)];
+        let mut report = vec![];
+        for (id, model) in models {
+            let (Some(program), Some(model)) = (cache.found.get(id), model) else {
+                report.push(format!("{id}: 모델이나 실행 파일을 정하지 못함"));
+                continue;
+            };
+            let prompt = build_prompt(PROBE_INSTRUCTION);
+            let verdict = match probe_provider(program, path_env, |d| build_invocation(id, &prompt, d, Some(&model)).unwrap(), Duration::from_secs(300)) {
+                Ok(m) => format!("OK {m}"),
+                Err(e) => format!("실패: {e}"),
+            };
+            report.push(format!("{id}: {verdict} (model={model})"));
+        }
+        eprintln!("\n== 모델 지정 실기기 결과 ==\n{}", report.join("\n"));
+        assert!(report.iter().all(|r| r.contains(": OK ")), "일부가 실패했다");
     }
 
     // ---- 요청 검증과 중복 실행 방지 ----

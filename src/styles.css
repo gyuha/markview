@@ -1801,3 +1801,78 @@ html[data-theme] .mu-editor .token.deleted {
 .settings-agents .cli-input {
   flex: 1 0 100%;
 }
+
+/* 프로바이더 탭: 행마다 이름·경로·켜고 끄기, 모델, 경로 지정, 상태 확인. */
+.settings-providers .provider-row {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-providers .provider-head {
+  display: flex;
+  flex: 1 0 100%;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.settings-providers .provider-head strong {
+  flex: 0 0 8rem;
+}
+
+.settings-providers .provider-head .cli-path {
+  flex: 1 1 auto;
+}
+
+.settings-providers .provider-model {
+  flex: 1 0 100%;
+}
+
+.settings-providers .provider-check {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.settings-providers .provider-result {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--fg-muted);
+}
+
+.settings-providers .provider-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 2.4rem;
+  height: 1.3rem;
+  padding: 0;
+  cursor: default;
+  background: var(--border);
+  border: none;
+  border-radius: 999px;
+}
+
+.settings-providers .provider-switch::after {
+  position: absolute;
+  top: 0.15rem;
+  left: 0.15rem;
+  width: 1rem;
+  height: 1rem;
+  content: "";
+  background: var(--bg);
+  border-radius: 50%;
+  transition: transform 0.12s;
+}
+
+.settings-providers .provider-switch[aria-checked="true"] {
+  background: var(--link);
+}
+
+.settings-providers .provider-switch[aria-checked="true"]::after {
+  transform: translateX(1.1rem);
+}
+
+.settings-agents .agent-status {
+  margin: 0 0 0.8rem;
+}

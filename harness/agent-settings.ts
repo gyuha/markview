@@ -1,5 +1,5 @@
 // AI 에이전트 설정 — 설정 창의 "에이전트" 탭(빠른 액션 편집 · CLI 경로). 실제 DOM 이벤트로 구동하고 DOM·저장소·모킹 IPC로만 판정한다.
-// 판정할 ID는 harness/required-agent.txt(B01~B11).
+// 판정할 ID는 harness/required-agent.txt(B01~B11). B07~B11의 CLI 경로는 "프로바이더" 탭에 있다.
 // 계약: 설정 창 `.modal.settings`의 탭 `[role=tab]`("에이전트") · `[data-qa-row]`(안에 `[data-qa-name]` input, `[data-qa-text]` textarea, `[data-qa-delete]`)
 //   · `[data-qa-add]` · `[data-qa-reset]` · `[data-qa-error]` · `[data-cli-row="<id>"]`(안에 `[data-cli-path]`, `[data-cli-input]`, `[data-cli-set]`, `[data-cli-error]`) · `[data-cli-refind]`
 //   · 저장소 키 `markview.agent.actions` · IPC `detect_agents {refresh?}` · `set_agent_path {preset, path}`.
@@ -47,15 +47,16 @@ async function chipsInNewWindow(): Promise<string[] | null> {
   return result;
 }
 
-async function openAgentTab(): Promise<void> {
+async function openSettingsTab(name: string): Promise<void> {
   if (!settings()) {
     $("#settings-button")!.click();
     await waitFor(() => settings());
   }
-  const tab = all("[role=tab]", settings()!).find((t) => text(t) === "에이전트");
+  const tab = all("[role=tab]", settings()!).find((t) => text(t) === name);
   tab?.click();
   await wait(200);
 }
+const openAgentTab = () => openSettingsTab("에이전트");
 
 async function main(): Promise<void> {
   if (params.has("child")) return;
@@ -175,7 +176,9 @@ async function main(): Promise<void> {
   await wait(200);
   check("B05", "기본값으로 복원하면 기본 4개로 돌아가고 칩도 같아진다", JSON.stringify(names()) === JSON.stringify(DEFAULT_NAMES) && JSON.stringify(chips()) === JSON.stringify(DEFAULT_NAMES), `names=${JSON.stringify(names())} chips=${JSON.stringify(chips())}`);
 
-  // B07 — CLI 경로 목록
+  // B07 — CLI 경로 목록(프로바이더 탭으로 옮겨졌다)
+  await openSettingsTab("프로바이더");
+  await waitFor(() => all("[data-cli-row]", settings()!).length > 0, 3000);
   const cliRows = all("[data-cli-row]", settings()!);
   const rowOf = (id: string) => cliRows.find((r) => r.dataset.cliRow === id);
   check(

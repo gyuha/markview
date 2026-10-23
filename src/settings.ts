@@ -10,6 +10,7 @@ import { applyDocWidth, DOC_WIDTHS, readDocWidth, saveDocWidth, type DocWidth } 
 import { readRestoreSession, saveRestoreSession } from "./session";
 import { createUpdateSection } from "./updateSection";
 import { createAgentSettings } from "./agentSettings";
+import { createProviderSettings } from "./providerSettings";
 
 export interface SettingsHost {
   getChoice(): Choice;
@@ -351,12 +352,14 @@ export function openSettings(host: SettingsHost): void {
   // --- 업데이트: 확인·설치는 Rust 커맨드가 한다(updateSection.ts). 열 때 네트워크 확인은 하지 않는다. ---
   const update = createUpdateSection(host);
   const agent = createAgentSettings();
+  const provider = createProviderSettings();
 
   // --- 탭: 모양 · 환경. 열면 항상 "모양"이 먼저 보이고, ←/→로 전환한다. 업데이트는 "환경"에 둔다. ---
   const panels: { label: string; nodes: HTMLElement[]; onShow?: () => void }[] = [
     { label: "모양", nodes: [widthSection, modeSection, colorSection] },
     { label: "환경", nodes: [restoreSection, update.section] },
     { label: "에이전트", nodes: [agent.section], onShow: agent.onShow },
+    { label: "프로바이더", nodes: [provider.section], onShow: provider.onShow },
   ];
   const tablist = document.createElement("div");
   tablist.className = "settings-tabs";

@@ -68,14 +68,14 @@ async function pageOpenedTabs(): Promise<void> {
     `raw=${JSON.stringify(rawOpen)}`,
   );
 
-  // S07 — 설정 다이얼로그는 "모양"·"환경"·"에이전트" 세 탭이고 처음엔 "모양".
+  // S07 — 설정 다이얼로그는 "모양"·"환경"·"에이전트"·"프로바이더" 네 탭이고 처음엔 "모양".
   document.querySelector<HTMLElement>("#settings-button")!.click();
   await wait(100);
   const dialog = document.querySelector<HTMLElement>(".settings");
   const tabs = [...(dialog?.querySelectorAll<HTMLElement>('[role="tablist"] [role="tab"]') ?? [])];
   const panels = [...(dialog?.querySelectorAll<HTMLElement>('[role="tabpanel"]') ?? [])];
   const visible = () => panels.filter((p) => !p.hidden);
-  const labelsOk = same(tabs.map((t) => t.textContent?.trim()), ["모양", "환경", "에이전트"]);
+  const labelsOk = same(tabs.map((t) => t.textContent?.trim()), ["모양", "환경", "에이전트", "프로바이더"]);
   const startsOnLook = tabs[0]?.getAttribute("aria-selected") === "true" && tabs[1]?.getAttribute("aria-selected") === "false";
   const lookPanel = visible()[0];
   const lookHasControls =
@@ -92,7 +92,7 @@ async function pageOpenedTabs(): Promise<void> {
   check(
     "S07",
     '설정 다이얼로그는 "모양"·"환경"·"에이전트" 탭이고 처음엔 "모양", ←/→로 전환되며 "모양"에 기존 컨트롤·"환경"에 토글이 있다',
-    !!dialog && labelsOk && startsOnLook && lookHasControls && afterRight && envHasSwitch && backToLook && panels.length === 3,
+    !!dialog && labelsOk && startsOnLook && lookHasControls && afterRight && envHasSwitch && backToLook && panels.length === 4,
     `labels=${labelsOk} startsOnLook=${startsOnLook} lookControls=${lookHasControls} right=${afterRight} switch=${envHasSwitch} left=${backToLook} panels=${panels.length}`,
   );
 

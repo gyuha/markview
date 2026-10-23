@@ -1,8 +1,7 @@
 /**
- * 설정 창의 "에이전트" 탭 — 빠른 액션 편집과 에이전트 CLI 경로.
- * 실행 파일 경로는 웹뷰가 아니라 Rust가 검증하고 저장한다(`set_agent_path`): 파일명이 프리셋 이름과 같은 실행 파일만 받는다.
+ * 설정 창의 "에이전트" 탭 — 빠른 액션 편집. 프로바이더(CLI) 설정은 "프로바이더" 탭(providerSettings.ts)에 있다.
  *
- * 화면 훅(`data-qa-*`·`data-cli-*`)은 하네스(harness/agent-settings.ts)가 읽는다 — 이름을 바꾸면 검사가 깨진다.
+ * 화면 훅(`data-qa-*`)은 하네스(harness/agent-settings.ts)가 읽는다 — 이름을 바꾸면 검사가 깨진다.
  */
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -104,66 +103,24 @@ export function createAgentSettings(): { section: HTMLElement; onShow(): void } 
   });
   renderRows();
 
-  // --- CLI 경로 ---
-  const cliHeading = el("h3", "settings-heading", "에이전트 CLI");
-  const cliHint = el("p", "settings-switch-hint", "로그인 셸의 PATH에서 찾습니다. 못 찾았거나 다른 것을 쓰려면 실행 파일의 절대 경로를 직접 지정하세요(파일 이름이 같아야 합니다).");
-  const cliList = el("div", "cli-list");
-  const refind = el("button", "qa-button", "다시 찾기");
-  refind.type = "button";
-  refind.dataset.cliRefind = "";
-  const cliActions = el("div", "qa-actions");
-  cliActions.append(refind);
-
-  /** 탐색 결과를 패널에도 알린다 — 같은 결과를 다시 묻지 않고 넘겨 준다. */
-  const publish = (agents: DetectedAgent[]) =>
-    window.dispatchEvent(new CustomEvent<DetectedAgent[]>(AGENTS_CHANGED_EVENT, { detail: agents }));
-
-  const renderCli = (agents: DetectedAgent[]): void => {
-    cliList.replaceChildren(
-      ...agents.map((agent) => {
-        const row = el("div", "cli-row");
-        row.dataset.cliRow = agent.id;
-        const name = el("strong", "", agent.name);
-        const path = el("span", "cli-path", agent.path ?? "없음");
-        path.dataset.cliPath = "";
-        const input = el("input", "cli-input");
-        input.type = "text";
-        input.placeholder = "직접 지정할 실행 파일의 절대 경로 (비우면 지정 해제)";
-        input.setAttribute("aria-label", `${agent.name} 실행 파일 경로`);
-        input.dataset.cliInput = "";
-        const set = el("button", "qa-button", "지정");
-        set.type = "button";
-        set.dataset.cliSet = "";
-        const error = el("p", "qa-error");
-        error.dataset.cliError = "";
-        error.hidden = true;
-        set.addEventListener("click", async () => {
-          error.hidden = true;
-          try {
-            await invoke("set_agent_path", { preset: agent.id, path: input.value });
-            const next = (await invoke<DetectedAgent[] | null>("detect_agents")) ?? [];
-            input.value = "";
-            renderCli(next);
-            publish(next);
-          } catch (e) {
-            error.textContent = String(e);
-            error.hidden = false;
-          }
-        });
-        row.append(name, path, input, set, error);
-        return row;
-      }),
-    );
+  // --- 사용할 수 있는 프로바이더 — 경로·모델·켜고 끄기는 "프로바이더" 탭에서 한다. ---
+  const status = el("p", "settings-switch-hint agent-status");
+  status.dataset.agentStatus = "";
+  const showStatus = (agents: DetectedAgent[]): void => {
+    const usable = agents.filter((a) => a.path !== null && a.enabled !== false).map((a) => a.name);
+    status.textContent = usable.length
+      ? `지금 쓸 수 있는 프로바이더: ${usable.join(", ")}`
+      : "지금 쓸 수 있는 프로바이더가 없습니다 — 설정의 '프로바이더' 탭에서 확인하세요.";
   };
+  window.addEventListener(AGENTS_CHANGED_EVENT, (event) => showStatus((event as CustomEvent<DetectedAgent[]>).detail));
 
-  const detect = async (refresh: boolean): Promise<void> => {
-    const agents = (await invoke<DetectedAgent[] | null>("detect_agents", refresh ? { refresh: true } : undefined).catch(() => null)) ?? [];
-    renderCli(agents);
-    if (refresh) publish(agents);
-  };
-  refind.addEventListener("click", () => void detect(true));
-
-  section.append(qaHeading, qaHint, qaList, qaError, qaActions, cliHeading, cliHint, cliList, cliActions);
+  section.append(status, qaHeading, qaHint, qaList, qaError, qaActions);
   // 탭을 볼 때 처음 묻는다 — 설정을 열기만 해서는 탐색을 일으키지 않는다. Rust가 결과를 캐시해 두므로 다시 봐도 싸다.
-  return { section, onShow: () => void detect(false) };
+  return {
+    section,
+    onShow: () =>
+      void invoke<DetectedAgent[] | null>("detect_agents")
+        .catch(() => null)
+        .then((agents) => showStatus(agents ?? [])),
+  };
 }

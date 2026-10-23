@@ -14,6 +14,10 @@ export interface DetectedAgent {
   id: string;
   name: string;
   path: string | null;
+  /** 설정 창에서 켜 둔 프로바이더인가. 없으면(구버전 응답) 켜진 것으로 본다. */
+  enabled?: boolean;
+  /** 설정 창에서 정한 모델. 없으면 CLI 자신의 설정을 따른다. */
+  model?: string | null;
 }
 
 /** 처음 쓸 때와 "기본값으로 복원"할 때의 목록. */

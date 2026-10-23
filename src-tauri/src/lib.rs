@@ -1,5 +1,6 @@
 mod agent;
 mod assets;
+mod provider;
 mod update;
 mod windows;
 
@@ -638,7 +639,10 @@ pub fn run() {
             agent::detect_agents,
             agent::run_agent,
             agent::cancel_agent,
-            agent::set_agent_path
+            agent::set_agent_path,
+            agent::set_provider_settings,
+            agent::provider_diagnostic,
+            agent::test_provider
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -132,7 +132,7 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
       <select data-agent-preset aria-label="에이전트 선택"></select>
       <button type="button" class="agent-close" data-agent-close aria-label="패널 닫기" title="닫기">×</button>
     </header>
-    <p class="agent-empty" data-agent-empty hidden>사용할 수 있는 에이전트를 찾지 못했습니다. Claude Code, Codex, OpenCode 중 하나를 설치하고 터미널에서 실행되는지 확인하세요.</p>
+    <p class="agent-empty" data-agent-empty hidden>사용할 수 있는 프로바이더가 없습니다. 설정의 '프로바이더' 탭에서 켜거나, Claude Code·Codex·OpenCode 중 하나를 설치하고 터미널에서 실행되는지 확인하세요.</p>
     <div class="agent-log" data-agent-log role="log" aria-live="polite"></div>
     <p class="agent-error" data-agent-error role="alert" hidden></p>
     <section class="agent-review" data-agent-review hidden>
@@ -190,7 +190,7 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
     return st;
   };
   const currentPath = () => host.activePath();
-  const found = () => (agents ?? []).filter((a) => a.path !== null);
+  const found = () => (agents ?? []).filter((a) => a.path !== null && a.enabled !== false);
 
   /** 수락할 수 있는 상태인가 — 시작 시점 원문과 지금 원문이 같아야 한다. */
   const isStale = (path: string, st: TabState) => host.peek(path) !== st.snapshot;
@@ -271,8 +271,8 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
       ...(agents ?? []).map((a) => {
         const opt = document.createElement("option");
         opt.value = a.id;
-        opt.disabled = a.path === null;
-        opt.textContent = a.path === null ? `${a.name} (없음)` : a.name;
+        opt.disabled = a.path === null || a.enabled === false;
+        opt.textContent = a.path === null ? `${a.name} (없음)` : a.enabled === false ? `${a.name} (꺼짐)` : a.name;
         return opt;
       }),
     );
