@@ -7,6 +7,8 @@
 //                                     두 엔진 모두 PASS이고 FAIL이 0개인가
 //   node harness/run.mjs ontop        harness/ontop-*.ts 전부에서 harness/required-ontop.txt의 ID가
 //                                     두 엔진 모두 PASS이고 FAIL이 0개인가
+//   node harness/run.mjs agent        harness/agent-*.ts 전부에서 harness/required-agent.txt의 ID가
+//                                     두 엔진 모두 PASS이고 FAIL이 0개인가
 //   node harness/run.mjs update       harness/update-*.ts 전부에서 harness/required-update.txt의 ID가
 //                                     두 엔진 모두 PASS이고 FAIL이 0개인가
 //
@@ -335,6 +337,7 @@ async function windows() {
 const muya = () => idsRun("muya", "harness/required-muya.txt", "Muya");
 const update = () => idsRun("update", "harness/required-update.txt", "업데이트");
 const ontop = () => idsRun("ontop", "harness/required-ontop.txt", "항상 위");
+const agent = () => idsRun("agent", "harness/required-agent.txt", "AI 에이전트");
 
 // 문서 너비 4단계 하네스. harness/required-width.txt의 ID가 두 엔진 모두 PASS이고 FAIL이 0개인가.
 async function width() {
@@ -367,9 +370,9 @@ async function width() {
 
 
 const mode = process.argv[2];
-const modes = { regression, muya, update, ontop, recent, colortheme, session, tabkeys, tabdrag, width, windows };
+const modes = { regression, muya, update, ontop, agent, recent, colortheme, session, tabkeys, tabdrag, width, windows };
 if (!modes[mode]) {
-  console.error("사용법: node harness/run.mjs <regression|muya|update|ontop|recent|colortheme|session|tabkeys|tabdrag|width|windows>");
+  console.error("사용법: node harness/run.mjs <regression|muya|update|ontop|agent|recent|colortheme|session|tabkeys|tabdrag|width|windows>");
   process.exit(64);
 }
 process.exit(await modes[mode]());

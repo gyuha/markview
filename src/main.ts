@@ -16,6 +16,7 @@ import { readOtherWindows, readRestoreSession, readSession, keepLastWindowAsMain
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { MuyaEditor, MuyaHost } from "./muya";
+import type { AgentPanel } from "./agentPanel";
 import { renderMermaid } from "./mermaid";
 import { openSettings } from "./settings";
 import { dirname, isExternalHref, renderInto, resolvePath } from "./render";
@@ -174,6 +175,7 @@ function activate(path: string): void {
 
   syncToolbar();
   persistSession();
+  agentPanel?.refresh();
 
   // 감춰진 동안 테마가 바뀐 탭은 이 시점에 따라잡는다 (전체 탭을 즉시 재렌더하지 않는 이유).
   const tab = findTab(path);
@@ -570,6 +572,7 @@ async function requestCloseTab(path: string): Promise<void> {
 function closeTab(path: string): void {
   const index = tabs.findIndex((t) => t.path === path);
   if (index < 0) return;
+  agentPanel?.forget(path);
   void invoke("release_file", { path });
   // 마지막 문서를 닫으면 빈 화면을 남기지 않고 창을 닫는다 (Safari·Chrome과 같은 동작).
   if (tabs.length === 1) {
@@ -932,6 +935,74 @@ function installOnTopControl(): void {
   });
 }
 
+let agentPanel: AgentPanel | null = null;
+
+/**
+ * 툴바 버튼으로 AI 에이전트 패널을 열고 닫는다. 패널 코드는 처음 열 때 불러온다(초기 로드 JS 한도).
+ * 패널이 건드리는 것은 탭의 원문뿐이다 — 문서 파일은 읽지도 쓰지도 않는다.
+ */
+function installAgentControl(): void {
+  const button = document.querySelector<HTMLElement>("#agent-button");
+  const root = document.querySelector<HTMLElement>("#agent-panel");
+  if (!button || !root) return;
+  let loading = false;
+  const set = (open: boolean) => {
+    button.setAttribute("aria-pressed", String(open));
+    if (open) agentPanel?.show();
+    else agentPanel?.hide();
+  };
+  button.addEventListener("click", async () => {
+    const open = button.getAttribute("aria-pressed") !== "true";
+    if (open && !agentPanel) {
+      if (loading) return;
+      loading = true;
+      try {
+        const { createAgentPanel } = await import("./agentPanel");
+        agentPanel = createAgentPanel(root, agentHost, () => set(false));
+      } finally {
+        loading = false;
+      }
+    }
+    set(open);
+  });
+}
+
+const agentHost = {
+  activePath: () => activePath,
+  source(path: string): string | null {
+    const tab = findTab(path);
+    if (!tab) return null;
+    // Muya는 입력을 묶어서 내보낸다 — 비교 직전에 밀어내야 마지막 입력까지 원문에 들어간다.
+    tab.muya?.flush();
+    return tab.source;
+  },
+  selection(path: string): string {
+    const tab = findTab(path);
+    if (!tab) return "";
+    if (tab.mode === "split" && tab.editor) {
+      const { from, to } = tab.editor.state.selection.main;
+      return tab.editor.state.sliceDoc(from, to);
+    }
+    if (tab.mode === "edit" && tab.muya) return tab.muya.editor.selection.getSelectedText();
+    return "";
+  },
+  peek: (path: string) => findTab(path)?.source ?? null,
+  async apply(path: string, text: string): Promise<void> {
+    const tab = findTab(path);
+    if (!tab) return;
+    tab.source = text;
+    markDirty(tab, true);
+    schedulePreview(tab);
+    syncEditor(tab);
+    // 편집 전용 모드를 보고 있으면 지금 들이고, 아니면 모드에 들어갈 때 showMuya가 들인다.
+    if (tab.muya && tab.mode === "edit") {
+      const { syncMuya } = await import("./muya");
+      tab.muyaSource = text;
+      syncMuya(tab.muya, text);
+    }
+  },
+};
+
 /** 세그먼트 컨트롤을 배선한다. 선택 테마를 고르는 컨트롤이며 실효 테마는 applyTheme가 유도한다. */
 function installThemeControl(): void {
   for (const button of document.querySelectorAll<HTMLElement>("#theme [data-choice]")) {
@@ -1218,6 +1289,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   syncToolbar();
   installThemeControl();
   installOnTopControl();
+  installAgentControl();
 
   // 사용자 토글과 OS 변경이 같은 진입점으로 들어온다 — 한쪽만 mermaid 재렌더를 잊는 일이 없도록.
   onSystemChange(() => {

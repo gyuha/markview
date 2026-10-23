@@ -389,10 +389,215 @@ html .editor-host ::selection {
   background: var(--border);
 }
 
+/* 문서 영역(#panes)과 에이전트 패널을 나란히 둔다. 패널이 숨겨져 있으면 #panes가 전부 차지한다. */
+#workspace {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 #panes {
   position: relative;
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
+}
+
+/* AI 에이전트 패널. display를 지정하면 UA의 [hidden]을 이기므로 아래에서 되돌린다(.pane과 같은 함정). */
+#agent-panel {
+  display: flex;
+  flex: 0 0 22rem;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 0;
+  padding: 0.6rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+}
+
+#agent-panel [hidden],
+#agent-panel[hidden] {
+  display: none !important;
+}
+
+#agent-panel .agent-head {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+#agent-panel .agent-head select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#agent-panel .agent-close {
+  padding: 0 0.4rem;
+  color: var(--fg-muted);
+  cursor: default;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+#agent-panel .agent-log {
+  flex: 1 1 6rem;
+  min-height: 3rem;
+  padding: 0.4rem;
+  overflow-y: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+#agent-panel .agent-error {
+  padding: 0.4rem 0.6rem;
+  margin: 0;
+  color: var(--error-fg);
+  background: var(--error-bg);
+  border-radius: 6px;
+}
+
+#agent-panel .agent-empty,
+#agent-panel .agent-note {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+#agent-panel .agent-review {
+  display: flex;
+  flex: 2 1 10rem;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-height: 0;
+}
+
+#agent-panel .agent-diff {
+  flex: 1 1 auto;
+  min-height: 4rem;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+#agent-panel .agent-diff > div {
+  padding: 0 0.4rem;
+}
+
+#agent-panel .agent-diff [data-line="add"] {
+  background: color-mix(in srgb, #2da44e 22%, transparent);
+}
+
+#agent-panel .agent-diff [data-line="del"] {
+  background: color-mix(in srgb, #cf222e 22%, transparent);
+}
+
+#agent-panel .agent-diff [data-line="add"]::before {
+  content: "+ ";
+}
+
+#agent-panel .agent-diff [data-line="del"]::before {
+  content: "− ";
+}
+
+#agent-panel .agent-diff [data-line="gap"] {
+  color: var(--fg-muted);
+}
+
+#agent-panel .agent-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+#agent-panel .agent-chips button {
+  padding: 0.05rem 0.55rem;
+  font-size: 0.8rem;
+  color: var(--fg);
+  cursor: default;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+#agent-panel .agent-chips button:disabled {
+  color: var(--fg-muted);
+  opacity: 0.55;
+}
+
+#agent-panel .agent-selection {
+  display: flex;
+  gap: 0.4rem;
+  align-items: flex-start;
+  padding: 0.25rem 0.4rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+}
+
+#agent-panel .agent-selection span {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: 4.5rem;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+#agent-panel .agent-selection button {
+  padding: 0 0.3rem;
+  color: var(--fg-muted);
+  cursor: default;
+  background: none;
+  border: none;
+}
+
+#agent-panel .agent-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+#agent-panel textarea {
+  width: 100%;
+  font: inherit;
+  color: var(--fg);
+  resize: vertical;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+#agent-panel .agent-actions {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+#agent-panel .agent-actions button {
+  padding: 0.2rem 0.7rem;
+  color: var(--fg);
+  cursor: default;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+#agent-panel .agent-actions button:disabled {
+  color: var(--fg-muted);
+  opacity: 0.55;
 }
 
 /* 탭마다 페인을 갖고, 그 안에서 좌우로 갈린다. 감춰도 스크롤과 렌더 결과가 남는다. */
@@ -1523,4 +1728,76 @@ html[data-theme] .mu-editor .token.deleted {
 
 .settings-update [hidden] {
   display: none;
+}
+
+/* 설정 창의 에이전트 탭: 빠른 액션 편집과 CLI 경로. */
+.settings-agents .qa-list,
+.settings-agents .cli-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0.6rem 0;
+}
+
+.settings-agents .qa-row,
+.settings-agents .cli-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: flex-start;
+}
+
+.settings-agents .qa-name {
+  flex: 0 0 9rem;
+}
+
+.settings-agents .qa-text {
+  flex: 1 1 14rem;
+  font: inherit;
+  resize: vertical;
+}
+
+.settings-agents input,
+.settings-agents textarea {
+  padding: 0.2rem 0.4rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.settings-agents .qa-button {
+  padding: 0.2rem 0.7rem;
+  color: var(--fg);
+  cursor: default;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.settings-agents .qa-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+
+.settings-agents .qa-error {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--error-fg);
+}
+
+.settings-agents [hidden] {
+  display: none;
+}
+
+.settings-agents .cli-path {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--fg-muted);
+}
+
+.settings-agents .cli-input {
+  flex: 1 0 100%;
 }

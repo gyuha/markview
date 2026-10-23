@@ -9,6 +9,7 @@ import { readColorTheme, saveColorTheme, type Choice } from "./theme";
 import { applyDocWidth, DOC_WIDTHS, readDocWidth, saveDocWidth, type DocWidth } from "./docWidth";
 import { readRestoreSession, saveRestoreSession } from "./session";
 import { createUpdateSection } from "./updateSection";
+import { createAgentSettings } from "./agentSettings";
 
 export interface SettingsHost {
   getChoice(): Choice;
@@ -349,11 +350,13 @@ export function openSettings(host: SettingsHost): void {
 
   // --- 업데이트: 확인·설치는 Rust 커맨드가 한다(updateSection.ts). 열 때 네트워크 확인은 하지 않는다. ---
   const update = createUpdateSection(host);
+  const agent = createAgentSettings();
 
   // --- 탭: 모양 · 환경. 열면 항상 "모양"이 먼저 보이고, ←/→로 전환한다. 업데이트는 "환경"에 둔다. ---
-  const panels: { label: string; nodes: HTMLElement[] }[] = [
+  const panels: { label: string; nodes: HTMLElement[]; onShow?: () => void }[] = [
     { label: "모양", nodes: [widthSection, modeSection, colorSection] },
     { label: "환경", nodes: [restoreSection, update.section] },
+    { label: "에이전트", nodes: [agent.section], onShow: agent.onShow },
   ];
   const tablist = document.createElement("div");
   tablist.className = "settings-tabs";
@@ -368,6 +371,7 @@ export function openSettings(host: SettingsHost): void {
       b.classList.toggle("active", i === index);
     });
     panelEls.forEach((p, i) => (p.hidden = i !== index));
+    panels[index].onShow?.();
   };
   panels.forEach(({ label, nodes }, index) => {
     const tabButton = document.createElement("button");

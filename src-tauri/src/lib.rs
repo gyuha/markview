@@ -1,3 +1,4 @@
+mod agent;
 mod assets;
 mod update;
 mod windows;
@@ -591,6 +592,7 @@ pub fn run() {
         .manage(WindowLabels::default())
         .manage(WindowInit::default())
         .manage(update::PendingUpdate::default())
+        .manage(agent::AgentState::default())
         // 창 닫기 요청을 막고 프론트엔드에 넘긴다 — 미저장 문서 확인은 탭 상태를 아는 쪽이 해야 한다.
         .on_window_event(|window, event| {
             // 실제로 드롭된 경로를 기록한다 — 편집 모드의 이미지 복사는 이 경로만 받는다.
@@ -632,7 +634,11 @@ pub fn run() {
             pick_markdown,
             list_image_paths,
             update::check_update,
-            update::install_update
+            update::install_update,
+            agent::detect_agents,
+            agent::run_agent,
+            agent::cancel_agent,
+            agent::set_agent_path
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
