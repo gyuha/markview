@@ -250,7 +250,8 @@ async function main(): Promise<void> {
   check(
     "A12",
     "거절하면 원문과 수정됨은 그대로이고 diff가 사라진다",
-    !shown("diff") && t1.source === baseText && t1.dirty === dirtyBefore && enabled("send"),
+    // 보내면 입력 상자가 비워지므로 거절 뒤 보내기는 새 지시를 쓸 때까지 비활성이다(Q08).
+    !shown("diff") && t1.source === baseText && t1.dirty === dirtyBefore,
     `diff=${shown("diff")} source=${t1.source === baseText} dirty=${t1.dirty}`,
   );
 

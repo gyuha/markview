@@ -29,6 +29,7 @@ export const DEFAULT_QUICK_ACTIONS: readonly QuickAction[] = [
 ];
 
 const KEY = "markview.agent.actions";
+const AUTO_ACCEPT_KEY = "markview.agent.autoaccept";
 
 /** 같은 창 안에서 목록이 바뀌었다(localStorage의 storage 이벤트는 다른 창에만 온다). */
 export const QUICK_ACTIONS_EVENT = "markview-quick-actions";
@@ -76,4 +77,21 @@ export function resetQuickActions(): void {
     /* 저장소를 쓸 수 없으면 기본값으로 읽힌다 */
   }
   window.dispatchEvent(new Event(QUICK_ACTIONS_EVENT));
+}
+
+/** 자동 수락 — 켜 두면 에이전트 결과가 올 때 diff 검토 없이 문서에 반영한다(저장은 하지 않는다). 기본 꺼짐. */
+export function readAutoAccept(): boolean {
+  try {
+    return localStorage.getItem(AUTO_ACCEPT_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveAutoAccept(on: boolean): void {
+  try {
+    localStorage.setItem(AUTO_ACCEPT_KEY, String(on));
+  } catch {
+    /* 저장소를 쓸 수 없으면 이번 창에서만 유지된다 */
+  }
 }

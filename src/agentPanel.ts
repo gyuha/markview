@@ -8,11 +8,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import diff from "fast-diff";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   AGENTS_CHANGED_EVENT,
   QUICK_ACTIONS_EVENT,
   isQuickActionsStorageKey,
+  readAutoAccept,
   readQuickActions,
+  saveAutoAccept,
   type DetectedAgent,
 } from "./agentConfig";
 
@@ -36,11 +39,29 @@ interface Row {
   line: string;
 }
 
+/** 출력 상자의 한 줄. `kind`는 user · status · thinking · tool · message · warning · error · raw 중 하나다. */
+interface Entry {
+  kind: string;
+  text: string;
+}
+
+type Outcome = "ok" | "error" | "cancelled";
+
 /** 탭별 상태. 다른 탭으로 가도 실행은 계속되고, 돌아오면 그대로 보인다. */
 interface TabState {
   phase: Phase;
+  /** 입력 상자에 쓰고 있는 글. 보내면 비워진다. */
   prompt: string;
-  log: string[];
+  /** 마지막으로 보낸 지시 — 실패·취소하면 입력 상자로 되돌리고, 다시 실행에 쓴다. */
+  sent: string;
+  log: Entry[];
+  /** 실행을 시작한 시각과 끝난 시각(ms). 끝나기 전에는 endedAt이 null이다. */
+  startedAt: number;
+  endedAt: number | null;
+  /** 지금 하는 일 — 상태 줄에 보인다. */
+  step: string;
+  provider: string;
+  outcome: Outcome | null;
   error: string | null;
   /** 실행을 시작한 시점의 원문 — 수락할 때 현재 원문과 같아야 한다. */
   snapshot: string;
@@ -133,7 +154,13 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
       <button type="button" class="agent-close" data-agent-close aria-label="패널 닫기" title="닫기">×</button>
     </header>
     <p class="agent-empty" data-agent-empty hidden>사용할 수 있는 프로바이더가 없습니다. 설정의 '프로바이더' 탭에서 켜거나, Claude Code·Codex·OpenCode 중 하나를 설치하고 터미널에서 실행되는지 확인하세요.</p>
-    <div class="agent-log" data-agent-log role="log" aria-live="polite"></div>
+    <section class="agent-output">
+      <div class="agent-output-head">
+        <span class="agent-status" data-agent-status hidden></span>
+        <button type="button" class="agent-copy" data-agent-copy title="출력을 클립보드로 복사">복사</button>
+      </div>
+      <div class="agent-log" data-agent-log role="log" aria-live="polite"></div>
+    </section>
     <p class="agent-error" data-agent-error role="alert" hidden></p>
     <section class="agent-review" data-agent-review hidden>
       <p class="agent-note" data-agent-stale hidden>실행하는 동안 문서가 바뀌었습니다. 결과를 수락할 수 없습니다 — 버리거나 지금 문서로 다시 실행하세요.</p>
@@ -154,6 +181,9 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
       </div>
       <textarea data-agent-prompt rows="3" placeholder="문서를 어떻게 고칠지 적으세요" aria-label="지시"></textarea>
       <div class="agent-actions">
+        <label class="agent-auto" title="결과가 오면 diff 검토 없이 문서에 바로 반영합니다. 저장은 하지 않습니다.">
+          <input type="checkbox" data-agent-autoaccept /> 자동 수락
+        </label>
         <button type="button" data-agent-send>보내기</button>
         <button type="button" data-agent-cancel>취소</button>
       </div>
@@ -163,12 +193,17 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
   const select = $<HTMLSelectElement>("preset");
   const empty = $("empty");
   const logEl = $("log");
+  const statusEl = $("status");
+  const copyBtn = $<HTMLButtonElement>("copy");
   const errorEl = $("error");
   const review = $("review");
   const stale = $("stale");
   const nochange = $("nochange");
   const diffEl = $("diff");
   const prompt = $<HTMLTextAreaElement>("prompt");
+  const autoBox = $<HTMLInputElement>("autoaccept");
+  autoBox.checked = readAutoAccept();
+  autoBox.addEventListener("change", () => saveAutoAccept(autoBox.checked));
   const chipsEl = $("chips");
   const selectionEl = $("selection");
   const selectionText = $("selection-text");
@@ -184,13 +219,77 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
   const stateOf = (path: string): TabState => {
     let st = states.get(path);
     if (!st) {
-      st = { phase: "idle", prompt: "", log: [], error: null, snapshot: "", result: "", rows: [], selection: "", cancelRequested: false, run: 0 };
+      st = {
+        phase: "idle", prompt: "", sent: "", log: [], startedAt: 0, endedAt: null, step: "", provider: "", outcome: null,
+        error: null, snapshot: "", result: "", rows: [], selection: "", cancelRequested: false, run: 0,
+      };
       states.set(path, st);
     }
     return st;
   };
   const currentPath = () => host.activePath();
   const found = () => (agents ?? []).filter((a) => a.path !== null && a.enabled !== false);
+
+  const mark: Record<string, string> = { user: "›", status: "·", thinking: "…", tool: "▸", warning: "⚠", error: "✗", message: "", raw: "" };
+
+  function entryEl(entry: Entry): HTMLElement {
+    const div = document.createElement("div");
+    div.dataset.kind = entry.kind;
+    if (mark[entry.kind]) {
+      const m = document.createElement("span");
+      m.className = "agent-mark";
+      m.textContent = mark[entry.kind];
+      div.append(m, " ");
+    }
+    div.append(entry.text);
+    return div;
+  }
+
+  /** 출력 상자에 한 줄을 더한다. 바로 앞 줄과 같으면(설정 경고 반복 등) 더하지 않는다. */
+  function pushEntry(path: string, entry: Entry): void {
+    const st = stateOf(path);
+    const last = st.log[st.log.length - 1];
+    if (last && last.kind === entry.kind && last.text === entry.text) return;
+    st.log.push(entry);
+    const overflow = st.log.length > MAX_LOG_LINES;
+    if (overflow) st.log.shift();
+    if (entry.kind === "status" || entry.kind === "thinking" || entry.kind === "tool") st.step = entry.text;
+    if (path !== currentPath()) return;
+    logEl.append(entryEl(entry));
+    if (overflow) logEl.firstElementChild?.remove();
+    logEl.scrollTop = logEl.scrollHeight;
+    updateStatus();
+    copyBtn.disabled = false;
+  }
+
+  const mmss = (ms: number) => {
+    const total = Math.max(0, Math.floor(ms / 1000));
+    return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+  };
+
+  /** 상태 줄 — 실행 중이면 누구에게 시킨 일이 얼마나 걸렸고 지금 무엇을 하는지, 끝나면 결과와 걸린 시간. */
+  function updateStatus(): void {
+    const path = currentPath();
+    const st = path ? states.get(path) : undefined;
+    if (!st || !st.startedAt) {
+      statusEl.hidden = true;
+      return;
+    }
+    const elapsed = mmss((st.endedAt ?? Date.now()) - st.startedAt);
+    statusEl.dataset.state = st.phase === "running" ? "running" : (st.outcome ?? "ok");
+    statusEl.textContent =
+      st.phase === "running"
+        ? `● ${st.provider} 실행 중 · ${elapsed} — ${st.step}`
+        : st.outcome === "error"
+          ? `✗ 실패 · ${elapsed}`
+          : st.outcome === "cancelled"
+            ? `취소됨 · ${elapsed}`
+            : `✓ 완료 · ${elapsed}`;
+    statusEl.hidden = false;
+  }
+
+  /** 출력 상자의 글을 복사할 문자열로 만든다. */
+  const outputText = (st: TabState) => st.log.map((e) => (e.kind === "user" ? `> ${e.text}` : e.text)).join("\n");
 
   /** 수락할 수 있는 상태인가 — 시작 시점 원문과 지금 원문이 같아야 한다. */
   const isStale = (path: string, st: TabState) => host.peek(path) !== st.snapshot;
@@ -202,14 +301,10 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
     const usable = found().length > 0;
 
     empty.hidden = agents === null || usable;
-    logEl.replaceChildren(
-      ...(st?.log ?? []).map((line) => {
-        const div = document.createElement("div");
-        div.textContent = line;
-        return div;
-      }),
-    );
+    logEl.replaceChildren(...(st?.log ?? []).map(entryEl));
     logEl.scrollTop = logEl.scrollHeight;
+    copyBtn.disabled = !st?.log.length;
+    updateStatus();
     errorEl.hidden = !st?.error;
     errorEl.textContent = st?.error ?? "";
 
@@ -303,31 +398,53 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
     render();
   }
 
-  async function run(path: string): Promise<void> {
+  async function run(path: string, raw: string): Promise<void> {
     const st = stateOf(path);
     const text = host.source(path);
     const preset = select.value;
-    if (text === null || !preset || !st.prompt.trim()) return;
+    if (text === null || !preset || !raw.trim()) return;
     // 고른 글자가 있으면 지시 앞에 인용한다. 에이전트가 고른 곳 밖을 고쳐도 막지 않는다 — diff에서 거절하면 된다.
-    const instruction = st.selection ? `다음 부분을 대상으로 해 줘:\n<선택>\n${st.selection}\n</선택>\n\n${st.prompt}` : st.prompt;
+    const instruction = st.selection ? `다음 부분을 대상으로 해 줘:\n<선택>\n${st.selection}\n</선택>\n\n${raw}` : raw;
     const id = ++st.run;
     st.phase = "running";
     st.error = null;
-    st.log = [];
+    st.outcome = null;
     st.snapshot = text;
     st.cancelRequested = false;
+    st.sent = raw;
+    st.provider = select.selectedOptions[0]?.textContent?.replace(/\s*\(.*\)$/, "") ?? preset;
+    st.startedAt = Date.now();
+    st.endedAt = null;
+    st.step = "요청을 보내는 중";
+    // 보낸 지시를 출력 상자 맨 위에 두고, 보내자마자 상태 줄이 돈다 — CLI가 첫 줄을 내기까지 비어 보이지 않게.
+    st.log = [{ kind: "user", text: raw }];
+    if (st.selection) st.log.push({ kind: "status", text: `고른 부분 ${st.selection.length}자를 함께 보냈습니다` });
+    st.log.push({ kind: "status", text: `${st.provider}에 요청을 보냈습니다` });
     render();
+    const finish = (outcome: Outcome) => {
+      st.endedAt = Date.now();
+      st.outcome = outcome;
+    };
     try {
       const result = await invoke<string>("run_agent", { preset, prompt: instruction, text, path });
       if (states.get(path) !== st || st.run !== id) return;
       st.result = result;
       st.rows = result === text ? [] : lineDiff(text, result);
       st.phase = "review";
+      finish("ok");
+      // 자동 수락: 변경이 있고 실행하는 동안 문서가 바뀌지 않았을 때만. 바뀌었으면 검토 화면에서 사람이 고른다.
+      if (autoBox.checked && result !== text && (await accept(path))) {
+        pushEntry(path, { kind: "status", text: "자동으로 수락해 문서에 반영했습니다 (저장은 직접 하세요)" });
+      }
     } catch (e) {
       if (states.get(path) !== st || st.run !== id) return;
       st.phase = "idle";
       // 사용자가 취소한 실행이 오류로 끝난 것은 오류가 아니다.
       st.error = st.cancelRequested ? null : String(e);
+      finish(st.cancelRequested ? "cancelled" : "error");
+      st.log.push({ kind: st.cancelRequested ? "status" : "error", text: st.cancelRequested ? "취소했습니다" : String(e) });
+      // 실패·취소한 지시는 입력 상자로 돌려 고쳐서 다시 보낼 수 있게 한다.
+      if (!st.prompt) st.prompt = st.sent;
     }
     if (path === currentPath()) render();
   }
@@ -341,17 +458,19 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
     render();
   }
 
-  async function accept(path: string): Promise<void> {
+  /** 결과를 문서에 반영한다. 실행하는 동안 문서가 바뀌었으면 반영하지 않고 false. */
+  async function accept(path: string): Promise<boolean> {
     const st = stateOf(path);
     // 편집기에 남은 입력까지 밀어낸 원문으로 비교한다.
     if (host.source(path) !== st.snapshot) {
       render();
-      return;
+      return false;
     }
     await host.apply(path, st.result);
     // 반영된 결과 뒤에는 고른 글자의 자리가 달라졌을 수 있다.
     st.selection = "";
     leaveReview(path);
+    return true;
   }
 
   showChips();
@@ -389,9 +508,32 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
     if (path) stateOf(path).prompt = prompt.value;
     render();
   });
+  // Enter로 보낸다(Shift+Enter는 줄바꿈). 한글 같은 조합 입력 중의 Enter는 글자를 확정하는 키이므로 보내지 않는다.
+  prompt.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    if (!btn.send.disabled) btn.send.click();
+  });
   btn.send.addEventListener("click", () => {
     const path = currentPath();
-    if (path) void run(path);
+    const raw = prompt.value.trim();
+    if (!path || !raw) return;
+    // 보낸 지시는 출력 상자 맨 위로 옮겨 가고 입력 상자는 비운다.
+    stateOf(path).prompt = "";
+    prompt.value = "";
+    void run(path, raw);
+  });
+  copyBtn.addEventListener("click", async () => {
+    const path = currentPath();
+    const st = path ? states.get(path) : undefined;
+    if (!st?.log.length) return;
+    try {
+      await writeText(outputText(st));
+      copyBtn.textContent = "복사됨";
+    } catch {
+      copyBtn.textContent = "복사 실패";
+    }
+    window.setTimeout(() => (copyBtn.textContent = "복사"), 1500);
   });
   btn.cancel.addEventListener("click", () => {
     const path = currentPath();
@@ -414,17 +556,17 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
   btn.rerun.addEventListener("click", () => {
     const path = currentPath();
     if (!path) return;
+    const again = stateOf(path).sent;
     leaveReview(path);
-    void run(path);
+    void run(path, again);
   });
   $("close").addEventListener("click", onClose);
 
-  void listen<{ path: string; stream: string; line: string }>("agent-log", (event) => {
-    const st = states.get(event.payload.path);
-    if (!st) return;
-    st.log.push(event.payload.line);
-    if (st.log.length > MAX_LOG_LINES) st.log.splice(0, st.log.length - MAX_LOG_LINES);
-    if (event.payload.path === currentPath()) render();
+  // 진행 단계(`kind`가 있는 줄)와 CLI 원문 줄(`kind`가 없는 줄)을 출력 상자에 차례로 쌓는다.
+  void listen<{ path: string; stream: string; kind?: string; line: string }>("agent-log", (event) => {
+    const { path, kind, line } = event.payload;
+    if (!states.has(path)) return;
+    pushEntry(path, { kind: kind ?? "raw", text: line });
   });
 
   // 검토 중에 사용자가 문서를 고치면 수락할 수 없게 바로 알린다.
@@ -433,6 +575,8 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
     const path = currentPath();
     const st = path ? states.get(path) : undefined;
     if (path && st?.phase === "review" && stale.hidden === !isStale(path, st)) render();
+    // 실행 중에는 경과 시간이 흐른다.
+    if (st?.phase === "running") updateStatus();
   }, 250);
 
   return {

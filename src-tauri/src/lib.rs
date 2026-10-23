@@ -1,5 +1,6 @@
 mod agent;
 mod assets;
+mod progress;
 mod provider;
 mod update;
 mod windows;

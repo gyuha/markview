@@ -1876,3 +1876,97 @@ html[data-theme] .mu-editor .token.deleted {
 .settings-agents .agent-status {
   margin: 0 0 0.8rem;
 }
+
+/* 에이전트 패널의 출력 상자: 보낸 지시 · 진행 단계 · 답을 차례로 쌓고, 상태 줄에 실행 중인 일과 걸린 시간을 보인다. */
+#agent-panel .agent-output {
+  display: flex;
+  flex: 1 1 8rem;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-height: 4rem;
+}
+
+#agent-panel .agent-output-head {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#agent-panel .agent-status {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#agent-panel .agent-status[data-state="running"] {
+  color: var(--link);
+}
+
+#agent-panel .agent-status[data-state="error"] {
+  color: var(--error-fg);
+}
+
+#agent-panel .agent-copy {
+  flex: 0 0 auto;
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  cursor: default;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+#agent-panel .agent-copy:disabled {
+  opacity: 0.5;
+}
+
+#agent-panel .agent-log {
+  flex: 1 1 auto;
+  min-height: 3rem;
+}
+
+#agent-panel .agent-log > div {
+  padding: 0.05rem 0;
+}
+
+#agent-panel .agent-log [data-kind="user"] {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+#agent-panel .agent-log [data-kind="message"] {
+  color: var(--fg);
+}
+
+#agent-panel .agent-log [data-kind="thinking"],
+#agent-panel .agent-log [data-kind="status"],
+#agent-panel .agent-log [data-kind="raw"] {
+  opacity: 0.75;
+}
+
+#agent-panel .agent-log [data-kind="warning"] {
+  color: var(--link);
+}
+
+#agent-panel .agent-log [data-kind="error"] {
+  color: var(--error-fg);
+}
+
+#agent-panel .agent-mark {
+  display: inline-block;
+  min-width: 0.9em;
+}
+
+#agent-panel .agent-auto {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  margin-right: auto;
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+}

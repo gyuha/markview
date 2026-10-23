@@ -16,6 +16,7 @@ use std::os::unix::process::CommandExt;
 
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::progress::{self, Parsed};
 use crate::provider::{self, ProviderSetting, Settings};
 
 /// 사본 파일 이름. 에이전트 프롬프트와 결과 읽기가 같은 이름을 쓴다.
@@ -78,7 +79,10 @@ pub fn build_invocation(preset_id: &str, prompt: &str, workdir: &Path, model: Op
                 with_model("--model"),
                 vec![
                     s("--permission-mode"), s("acceptEdits"), s("--permission-prompts"), s("none"),
-                    s("--tools"), s("Read,Edit,Write"), s("-p"), s(prompt),
+                    s("--tools"), s("Read,Edit,Write"),
+                    // 진행 단계를 줄 단위 JSON으로 받는다(`-p`는 끝날 때까지 아무것도 찍지 않는다). stream-json은 --verbose가 필요하다.
+                    s("--output-format"), s("stream-json"), s("--verbose"),
+                    s("-p"), s(prompt),
                 ],
             ]
             .concat(),
@@ -86,7 +90,7 @@ pub fn build_invocation(preset_id: &str, prompt: &str, workdir: &Path, model: Op
         ),
         "codex" => (
             [
-                vec![s("exec"), s("--sandbox"), s("workspace-write"), s("--skip-git-repo-check"), s("--ephemeral")],
+                vec![s("exec"), s("--json"), s("--sandbox"), s("workspace-write"), s("--skip-git-repo-check"), s("--ephemeral")],
                 with_model("-m"),
                 vec![s("--color"), s("never"), s("-C"), dir, s(prompt)],
             ]
@@ -94,7 +98,7 @@ pub fn build_invocation(preset_id: &str, prompt: &str, workdir: &Path, model: Op
             vec![],
         ),
         "opencode" => (
-            [vec![s("run")], with_model("-m"), vec![s("--dir"), dir, s(prompt)]].concat(),
+            [vec![s("run"), s("--format"), s("json")], with_model("-m"), vec![s("--dir"), dir, s(prompt)]].concat(),
             vec![(
                 s("OPENCODE_CONFIG_CONTENT"),
                 s(r#"{"permission":{"edit":"allow","bash":"deny","webfetch":"deny"}}"#),
@@ -405,6 +409,7 @@ const PROBE_INSTRUCTION: &str = "문서 맨 끝에 `- 연결 확인` 한 줄을 
 /// 작은 실제 호출로 이 프로바이더가 쓸 수 있는지 본다. 실패하면 CLI가 마지막으로 낸 줄을 오류에 붙인다 —
 /// 로그인이 안 됐거나 계정 문제일 때 그 이유가 거기 있다.
 fn probe_provider(
+    preset: &str,
     program: &Path,
     path_env: Option<&str>,
     make_invocation: impl FnOnce(&Path) -> Invocation,
@@ -412,6 +417,7 @@ fn probe_provider(
 ) -> Result<String, String> {
     let last = Arc::new(Mutex::new(String::new()));
     let sink = last.clone();
+    let preset = preset.to_string();
     let started = Instant::now();
     let out = run_in_workdir(
         program,
@@ -420,9 +426,16 @@ fn probe_provider(
         PROBE_DOC,
         &AtomicBool::new(false),
         timeout,
-        Arc::new(move |_, line| {
-            if !line.trim().is_empty() {
-                *sink.lock().unwrap() = line;
+        Arc::new(move |stream, line| {
+            // 실패 이유가 될 만한 줄만 남긴다: 원문 줄과 오류·경고 단계. JSON 이벤트 원문은 읽을 수 없다.
+            match progress::interpret(&preset, matches!(stream, Stream::Out), &line) {
+                Parsed::Raw(text) => *sink.lock().unwrap() = text,
+                Parsed::Events(events) => {
+                    if let Some(e) = events.into_iter().rev().find(|e| e.kind == "error" || e.kind == "warning") {
+                        *sink.lock().unwrap() = e.text;
+                    }
+                }
+                Parsed::Skip => {}
             }
         }),
     );
@@ -584,6 +597,9 @@ pub struct DetectedAgent {
 struct AgentLog {
     path: String,
     stream: &'static str,
+    /// 해석한 진행 단계의 종류(status·thinking·tool·message·warning·error). 원문 줄이면 없다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<&'static str>,
     line: String,
 }
 
@@ -660,13 +676,19 @@ pub async fn run_agent(
         let full_prompt = build_prompt(&prompt);
         let model = state.provider(&preset).model;
         let emit_app = task_app.clone();
+        let log_preset = preset.clone();
+        // CLI의 스트리밍 JSON을 진행 단계로 바꿔 보낸다. 해석할 수 없는 줄은 원문 그대로, 훅 같은 잡음은 버린다.
         let on_line: Arc<dyn Fn(Stream, String) + Send + Sync> = Arc::new(move |stream, line| {
-            let payload = AgentLog {
-                path: path.clone(),
-                stream: if matches!(stream, Stream::Out) { "out" } else { "err" },
-                line,
+            let from_stdout = matches!(stream, Stream::Out);
+            let send = |kind: Option<&'static str>, line: String| {
+                let payload = AgentLog { path: path.clone(), stream: if from_stdout { "out" } else { "err" }, kind, line };
+                let _ = emit_app.emit_to(label.as_str(), "agent-log", payload);
             };
-            let _ = emit_app.emit_to(label.as_str(), "agent-log", payload);
+            match progress::interpret(&log_preset, from_stdout, &line) {
+                Parsed::Events(events) => events.into_iter().for_each(|e| send(Some(e.kind), e.text)),
+                Parsed::Raw(text) => send(None, text),
+                Parsed::Skip => {}
+            }
         });
         run_in_workdir(
             &program,
@@ -739,6 +761,7 @@ pub async fn test_provider(app: AppHandle, window: tauri::WebviewWindow, preset:
         let model = state.provider(&preset).model;
         let prompt = build_prompt(PROBE_INSTRUCTION);
         probe_provider(
+            &preset,
             &program,
             (!cache.shell_path.is_empty()).then_some(cache.shell_path.as_str()),
             |dir| build_invocation(&preset, &prompt, dir, model.as_deref()).expect("preset checked"),
@@ -1064,7 +1087,14 @@ mod tests {
                 "# 제목\n\n본문\n",
                 &AtomicBool::new(false),
                 Duration::from_secs(300),
-                Arc::new(|_, l| eprintln!("    [log] {l}")),
+                {
+                    let id = p.id;
+                    Arc::new(move |stream, l| match progress::interpret(id, matches!(stream, Stream::Out), &l) {
+                        Parsed::Events(events) => events.iter().for_each(|e| eprintln!("    [{}] {}", e.kind, e.text)),
+                        Parsed::Raw(text) => eprintln!("    [raw] {text}"),
+                        Parsed::Skip => {}
+                    })
+                },
             );
             let verdict = match &out {
                 Ok(t) if t.contains("확인용 줄") && t.starts_with("# 제목") => "OK".to_string(),
@@ -1184,6 +1214,19 @@ mod tests {
     }
 
     #[test]
+    fn agent_progress_invocations_ask_for_streaming_json() {
+        let dir = Path::new("/tmp/mv-x");
+        let joined = |id: &str| build_invocation(id, "PROMPT", dir, None).unwrap().args.join(" ");
+        assert!(joined("claude").contains("--output-format stream-json --verbose"), "stream-json은 --verbose가 있어야 한다");
+        assert!(joined("codex").contains("exec --json"));
+        assert!(joined("opencode").contains("run --format json"));
+        // 프롬프트는 여전히 마지막 인자다(스트리밍 옵션이 그 뒤로 가면 CLI가 프롬프트로 읽는다).
+        for id in ["claude", "codex", "opencode"] {
+            assert_eq!(build_invocation(id, "PROMPT", dir, None).unwrap().args.last().map(String::as_str), Some("PROMPT"), "{id}");
+        }
+    }
+
+    #[test]
     fn agent_provider_disabled_blocks_run() {
         let w = scratch("disabled");
         let st = AgentState::default();
@@ -1231,22 +1274,22 @@ mod tests {
     fn agent_provider_test_reports_failure() {
         let w = scratch("probe");
         let ok = script(&w.0, "okcli", "printf -- '- 연결 확인\\n' >> document.md");
-        let r = probe_provider(&ok, None, |_| Invocation { args: vec![], env: vec![] }, Duration::from_secs(10));
+        let r = probe_provider("claude", &ok, None, |_| Invocation { args: vec![], env: vec![] }, Duration::from_secs(10));
         assert!(r.as_ref().is_ok_and(|m| m.starts_with("OK")), "{r:?}");
 
         // 실패하면 CLI가 마지막으로 낸 줄이 이유로 붙는다.
         let login = script(&w.0, "logincli", "echo 'starting' >&2\necho '로그인이 필요합니다' >&2\nexit 1");
-        let e = probe_provider(&login, None, |_| Invocation { args: vec![], env: vec![] }, Duration::from_secs(10)).unwrap_err();
+        let e = probe_provider("claude", &login, None, |_| Invocation { args: vec![], env: vec![] }, Duration::from_secs(10)).unwrap_err();
         assert!(e.contains("로그인이 필요합니다"), "{e}");
 
         // 문서를 고치지 않은 성공도 성공이 아니다.
         let lazy = script(&w.0, "lazycli", "true");
-        assert!(probe_provider(&lazy, None, |_| Invocation { args: vec![], env: vec![] }, Duration::from_secs(10)).is_err());
+        assert!(probe_provider("claude", &lazy, None, |_| Invocation { args: vec![], env: vec![] }, Duration::from_secs(10)).is_err());
 
         // 오래 걸리면 중단하고 시간 초과를 알린다.
         let slow = script(&w.0, "slowcli", "sleep 30");
         let t = Instant::now();
-        let e = probe_provider(&slow, None, |_| Invocation { args: vec![], env: vec![] }, Duration::from_millis(300)).unwrap_err();
+        let e = probe_provider("claude", &slow, None, |_| Invocation { args: vec![], env: vec![] }, Duration::from_millis(300)).unwrap_err();
         assert!(e.contains("끝나지 않아"), "{e}");
         assert!(t.elapsed() < Duration::from_secs(10));
     }
@@ -1273,7 +1316,7 @@ mod tests {
                 continue;
             };
             let prompt = build_prompt(PROBE_INSTRUCTION);
-            let verdict = match probe_provider(program, path_env, |d| build_invocation(id, &prompt, d, Some(&model)).unwrap(), Duration::from_secs(300)) {
+            let verdict = match probe_provider(id, program, path_env, |d| build_invocation(id, &prompt, d, Some(&model)).unwrap(), Duration::from_secs(300)) {
                 Ok(m) => format!("OK {m}"),
                 Err(e) => format!("실패: {e}"),
             };
