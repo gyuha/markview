@@ -238,6 +238,20 @@
         </div>
         <button
           type="button"
+          id="agent-button"
+          class="settings-button"
+          data-agent-toggle
+          aria-pressed="false"
+          aria-label="AI 에이전트"
+          title="AI 에이전트"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8Z" />
+            <path d="M18.5 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8Z" />
+          </svg>
+        </button>
+        <button
+          type="button"
           id="ontop-button"
           class="settings-button"
           data-ontop
@@ -266,12 +280,15 @@
         </button>
       </div>
     </div>
-    <div id="panes">
-      <div id="empty">
-        <p>마크다운 파일을 이 창으로 끌어다 놓으세요.</p>
-        <p><button id="empty-open" type="button">파일 열기 <kbd>⌘O</kbd></button></p>
-        <p>최근 파일 목록은 <kbd>⇧⌘O</kbd></p>
+    <div id="workspace">
+      <div id="panes">
+        <div id="empty">
+          <p>마크다운 파일을 이 창으로 끌어다 놓으세요.</p>
+          <p><button id="empty-open" type="button">파일 열기 <kbd>⌘O</kbd></button></p>
+          <p>최근 파일 목록은 <kbd>⇧⌘O</kbd></p>
+        </div>
       </div>
+      <aside id="agent-panel" data-agent-panel aria-label="AI 에이전트" hidden></aside>
     </div>
     <div id="notice" hidden></div>
   </body>
