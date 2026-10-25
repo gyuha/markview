@@ -13,6 +13,10 @@ AI 에이전트(Claude Code·Codex·OpenCode)를 Paseo(`getpaseo/paseo`, Apache-
 - **웹뷰는 모델·경로·명령을 `run_agent`로 넘기지 않는다.** 인자 키는 `{preset, prompt, text, path}` 그대로이고 Rust가 저장된 설정에서 읽는다. 하네스(`P08`)와 검사(`command`·`argv`·`env` 키 grep)가 이를 지킨다.
 - **Paseo의 세션 계층(장수 세션·스트리밍·권한 요청)은 가져오지 않았다.** 이 앱의 실행은 임시 사본에서 한 번 고치는 일회성이다.
 
+- **진행 표시와 자동 수락 (2026-10-24 추가)**: 실행 중에는 CLI의 스트리밍 JSON(claude `--output-format stream-json --verbose` · codex `exec --json` · opencode `run --format json`)을 Rust가 진행 단계(상태·생각·도구·메시지·경고·오류)로 바꿔 보여 준다 — Paseo가 provider별 이벤트를 하나의 타임라인으로 정규화하는 것과 같은 생각이다. 도구 입력·임시 폴더 경로·문서 내용은 화면에 싣지 않는다. **자동 수락**은 패널의 체크박스(기본 꺼짐)로 사용자가 켠 경우에만 결과를 diff 검토 없이 문서에 반영하며, 실행 중 문서가 바뀌었으면 자동으로 수락하지 않고 검토로 넘긴다. 어느 쪽이든 **문서 파일은 쓰지 않는다**(저장은 사용자가 한다) — ADR 261022-230253의 "원본은 수락 전까지 바뀌지 않는다"는 그대로이고, 자동 수락은 그 수락을 사용자가 미리 해 두는 것이다.
+
+- **대화 이어가기 (2026-10-24 추가)**: 같은 탭에서 연달아 보내면 이전 질문을 기억한다. 탭마다 임시 폴더를 유지하고(`reset_agent_session`·탭 닫기·프로바이더 변경 때 지운다), CLI가 알려 준 대화 ID를 Rust가 받아 두었다가 다음 전송에 claude `--resume`·codex `exec resume`·opencode `--session`으로 되돌려 준다. 웹뷰는 대화 ID를 모르고 `run_agent` 인자 키도 그대로다. ID는 `^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$`만 받는다(옵션으로 읽히는 값 거부). 이어서 보낼 때마다 사본을 **현재 문서로 덮어쓰고** 에이전트에게 "문서가 바뀌었을 수 있으니 다시 읽으라"고 알린다(사용자가 수락·거절·직접 편집했을 수 있다). **감수하는 결과**: codex는 이어가려면 `--ephemeral`을 뺄 수밖에 없어 대화 기록이 `~/.codex/sessions`에 남는다(문서 내용 포함 — claude·opencode는 원래 남긴다). 연결 시험처럼 이어갈 일이 없는 한 번짜리 실행은 계속 `--ephemeral`이다. `exec resume`에는 `--sandbox`·`-C`가 없어 `-c sandbox_mode="workspace-write"`로 같은 제한을 건다.
+
 ## 버린 대안
 - **Paseo처럼 `command`·`env`·커스텀 provider를 설정에서 받기** — 유연하지만 위 이유로 ADR 261022-230253을 뒤집어야 한다.
 - **탭 분리만 하고 설정 항목은 그대로** — 요청한 "provider 설정"이 아니라 이름만 바꾼 것이다.

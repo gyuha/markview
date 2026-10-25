@@ -1970,3 +1970,78 @@ html[data-theme] .mu-editor .token.deleted {
   font-size: 0.8rem;
   color: var(--fg-muted);
 }
+
+/* 내가 보낸 질의는 말풍선으로 에이전트의 단계·답과 구별한다. 아래에 시각과 되돌리기·복사 아이콘이 붙는다. */
+#agent-panel .agent-log [data-kind="user"] {
+  margin: 0.7rem 0 0;
+  padding: 0.5rem 0.8rem;
+  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
+  font-size: 0.85rem;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--fg);
+  white-space: pre-wrap;
+  background: color-mix(in srgb, var(--fg) 12%, var(--bg));
+  border-radius: 14px;
+}
+
+#agent-panel .agent-log > div:first-child[data-kind="user"] {
+  margin-top: 0.1rem;
+}
+
+#agent-panel .agent-meta {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  justify-content: flex-end;
+  margin: 0.15rem 0.2rem 0.4rem;
+  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+}
+
+#agent-panel .agent-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  color: var(--fg-muted);
+  cursor: default;
+  background: none;
+  border: none;
+  border-radius: 6px;
+}
+
+#agent-panel .agent-icon:hover:not(:disabled) {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+}
+
+#agent-panel .agent-icon:disabled {
+  opacity: 0.35;
+}
+
+#agent-panel .agent-icon[data-copied] {
+  color: var(--link);
+}
+
+/* 에이전트의 답 줄의 복사 아이콘은 줄 위에 올려 둘 때만 보인다. */
+#agent-panel .agent-log [data-kind="message"] {
+  position: relative;
+}
+
+#agent-panel .agent-log [data-kind="message"] .agent-icon {
+  position: absolute;
+  top: 0;
+  right: 0;
+  opacity: 0;
+}
+
+#agent-panel .agent-log [data-kind="message"]:hover .agent-icon,
+#agent-panel .agent-log [data-kind="message"] .agent-icon:focus-visible,
+#agent-panel .agent-log [data-kind="message"] .agent-icon[data-copied] {
+  opacity: 1;
+  background: var(--bg);
+}

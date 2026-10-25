@@ -59,6 +59,14 @@ pub struct Invocation {
 
 /// 사용자 지시문을 감싼 전체 프롬프트. 항상 고정 문장으로 시작해서 지시문이 `-`로 시작해도
 /// CLI가 옵션으로 읽지 못한다.
+/// 이어서 보내는 전송의 프롬프트. 문서는 이전 대화 뒤에 사용자가 고치거나 거절해서 달라졌을 수 있다.
+pub fn build_followup_prompt(instruction: &str) -> String {
+    format!(
+        "이어서 요청한다. {FILE_NAME} 문서는 이전 대화 뒤에 바뀌었을 수 있으니 먼저 현재 파일을 다시 읽고, 아래 지시를 처리해 줘. \
+         이 파일만 직접 고치고 다른 파일은 만들거나 바꾸지 마.\n\n지시:\n{instruction}"
+    )
+}
+
 pub fn build_prompt(instruction: &str) -> String {
     format!(
         "현재 폴더의 {FILE_NAME} 마크다운 문서를 아래 지시에 따라 수정해 줘. 이 파일만 직접 고치고 \
@@ -66,17 +74,35 @@ pub fn build_prompt(instruction: &str) -> String {
     )
 }
 
+/// 이번 전송이 대화에서 어디인가. 같은 탭의 대화(세션)는 CLI의 세션 기능으로 이어 간다.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Turn<'a> {
+    /// 이어갈 수 없는 한 번짜리 실행(연결 시험 등). codex는 기록을 남기지 않는다(`--ephemeral`).
+    OneShot,
+    /// 대화의 첫 전송. 다음 전송에서 이어갈 수 있게 기록을 남긴다.
+    First,
+    /// CLI가 알려 준 대화 ID로 이어서 보낸다. ID는 `progress::is_safe_session_id`를 통과한 값이어야 한다.
+    Resume(&'a str),
+}
+
+/// 한 번짜리 실행의 인자(`Turn::OneShot`).
+pub fn build_invocation(preset_id: &str, prompt: &str, workdir: &Path, model: Option<&str>) -> Option<Invocation> {
+    build_turn_invocation(preset_id, prompt, workdir, model, Turn::OneShot)
+}
+
 /// `model`은 `provider::validate_model`을 통과한 값이어야 한다(옵션처럼 읽히는 값은 거기서 걸러진다).
 /// 모델 인자는 프롬프트 앞에 두고, 모델이 없으면 인자를 더하지 않는다.
-pub fn build_invocation(preset_id: &str, prompt: &str, workdir: &Path, model: Option<&str>) -> Option<Invocation> {
+pub fn build_turn_invocation(preset_id: &str, prompt: &str, workdir: &Path, model: Option<&str>, turn: Turn) -> Option<Invocation> {
     let s = |v: &str| v.to_string();
     let dir = workdir.to_string_lossy().into_owned();
     let with_model = |flag: &str| -> Vec<String> { model.map(|m| vec![s(flag), s(m)]).unwrap_or_default() };
+    let resume = if let Turn::Resume(id) = turn { Some(id) } else { None };
     let (args, env) = match preset_id {
         // 도구를 읽기·편집·쓰기로 줄이고, 프롬프트가 필요한 요청은 묻지 않고 거부한다.
         "claude" => (
             [
                 with_model("--model"),
+                resume.map(|id| vec![s("--resume"), s(id)]).unwrap_or_default(),
                 vec![
                     s("--permission-mode"), s("acceptEdits"), s("--permission-prompts"), s("none"),
                     s("--tools"), s("Read,Edit,Write"),
@@ -88,17 +114,33 @@ pub fn build_invocation(preset_id: &str, prompt: &str, workdir: &Path, model: Op
             .concat(),
             vec![],
         ),
+        // `exec resume`은 `--sandbox`·`-C`·`--color`가 없다 — 같은 제한을 설정 덮어쓰기로 걸고, 폴더는 프로세스의 cwd다.
         "codex" => (
-            [
-                vec![s("exec"), s("--json"), s("--sandbox"), s("workspace-write"), s("--skip-git-repo-check"), s("--ephemeral")],
-                with_model("-m"),
-                vec![s("--color"), s("never"), s("-C"), dir, s(prompt)],
-            ]
-            .concat(),
+            match resume {
+                Some(id) => [
+                    vec![s("exec"), s("resume"), s("--json"), s("--skip-git-repo-check"), s("-c"), s(r#"sandbox_mode="workspace-write""#)],
+                    with_model("-m"),
+                    vec![s(id), s(prompt)],
+                ]
+                .concat(),
+                None => [
+                    vec![s("exec"), s("--json"), s("--sandbox"), s("workspace-write"), s("--skip-git-repo-check")],
+                    if turn == Turn::OneShot { vec![s("--ephemeral")] } else { vec![] },
+                    with_model("-m"),
+                    vec![s("--color"), s("never"), s("-C"), dir, s(prompt)],
+                ]
+                .concat(),
+            },
             vec![],
         ),
         "opencode" => (
-            [vec![s("run"), s("--format"), s("json")], with_model("-m"), vec![s("--dir"), dir, s(prompt)]].concat(),
+            [
+                vec![s("run"), s("--format"), s("json")],
+                with_model("-m"),
+                resume.map(|id| vec![s("--session"), s(id)]).unwrap_or_default(),
+                vec![s("--dir"), dir, s(prompt)],
+            ]
+            .concat(),
             vec![(
                 s("OPENCODE_CONFIG_CONTENT"),
                 s(r#"{"permission":{"edit":"allow","bash":"deny","webfetch":"deny"}}"#),
@@ -325,9 +367,26 @@ fn pump(reader: impl Read + Send + 'static, stream: Stream, on_line: Arc<dyn Fn(
     })
 }
 
-/// 임시 폴더에 `text`를 쓰고, 그 폴더를 cwd로 `program`을 돌린 뒤 고쳐진 텍스트를 돌려준다.
+/// 새 임시 폴더에 `text`를 쓰고, 그 폴더를 cwd로 `program`을 돌린 뒤 고쳐진 텍스트를 돌려준다. 끝나면 폴더를 지운다.
 /// `make_invocation`은 임시 폴더 경로를 받아 인자를 만든다(프리셋별 인자는 `build_invocation`).
 pub fn run_in_workdir(
+    program: &Path,
+    path_env: Option<&str>,
+    make_invocation: impl FnOnce(&Path) -> Invocation,
+    text: &str,
+    cancel: &AtomicBool,
+    timeout: Duration,
+    on_line: Arc<dyn Fn(Stream, String) + Send + Sync>,
+) -> Result<String, AgentError> {
+    let work = WorkDir::create().map_err(|e| AgentError::Failed(format!("임시 폴더를 만들지 못했습니다: {e}")))?;
+    run_in_dir(&work.0, program, path_env, make_invocation, text, cancel, timeout, on_line)
+}
+
+/// 이미 있는 폴더에서 돌린다 — 이어서 묻는 대화(세션)는 같은 폴더를 계속 쓴다. 사본은 이번 전송의 `text`로 덮어쓴다
+/// (이전 전송 뒤에 사용자가 문서를 고쳤을 수 있다). 폴더는 지우지 않는다.
+#[allow(clippy::too_many_arguments)]
+pub fn run_in_dir(
+    dir: &Path,
     program: &Path,
     path_env: Option<&str>,
     make_invocation: impl FnOnce(&Path) -> Invocation,
@@ -339,14 +398,13 @@ pub fn run_in_workdir(
     if text.len() > MAX_BYTES {
         return Err(AgentError::Failed("문서가 너무 큽니다(5MB 초과)".into()));
     }
-    let work = WorkDir::create().map_err(|e| AgentError::Failed(format!("임시 폴더를 만들지 못했습니다: {e}")))?;
-    let file = work.0.join(FILE_NAME);
+    let file = dir.join(FILE_NAME);
     std::fs::write(&file, text).map_err(|e| AgentError::Failed(format!("임시 사본을 쓰지 못했습니다: {e}")))?;
 
-    let inv = make_invocation(&work.0);
+    let inv = make_invocation(dir);
     let mut cmd = Command::new(program);
     cmd.args(&inv.args)
-        .current_dir(&work.0)
+        .current_dir(dir)
         .env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -467,6 +525,16 @@ pub struct AgentState {
     /// 프로바이더별 활성·모델. 앱 설정 폴더의 `agent-providers.json`에 저장된다.
     providers: Mutex<Settings>,
     providers_file: Mutex<Option<PathBuf>>,
+    /// 탭(창 라벨 + 경로)마다 이어 가는 대화. 같은 임시 폴더와 CLI가 알려 준 대화 ID를 들고 있다.
+    sessions: Mutex<HashMap<String, Session>>,
+}
+
+/// 한 탭의 대화. 임시 폴더는 `WorkDir`가 쥐고 있어서 대화가 끝나면(`reset_session`·프로바이더 변경·앱 종료 정리) 지워진다.
+struct Session {
+    preset: String,
+    work: WorkDir,
+    /// CLI가 알려 준 대화 ID. 아직 모르면 None.
+    cli_id: Option<String>,
 }
 
 impl AgentState {
@@ -483,6 +551,37 @@ impl AgentState {
 
     fn end(&self, key: &str) {
         self.runs.lock().unwrap().remove(key);
+    }
+
+    /// 이번 전송이 쓸 폴더와 이어갈 대화 ID. 이 탭의 대화가 없거나 다른 프로바이더의 것이면 새로 시작한다(예전 폴더는 지운다).
+    fn session_for_run(&self, key: &str, preset: &str) -> Result<(PathBuf, Option<String>), String> {
+        let mut sessions = self.sessions.lock().unwrap();
+        if let Some(existing) = sessions.get(key) {
+            if existing.preset == preset {
+                return Ok((existing.work.0.clone(), existing.cli_id.clone()));
+            }
+            sessions.remove(key);
+        }
+        let work = WorkDir::create().map_err(|e| format!("임시 폴더를 만들지 못했습니다: {e}"))?;
+        let dir = work.0.clone();
+        sessions.insert(key.to_string(), Session { preset: preset.to_string(), work, cli_id: None });
+        Ok((dir, None))
+    }
+
+    /// 전송이 끝난 뒤 CLI가 알려 준 대화 ID를 기억한다. 이어가던 대화가 실패했으면 ID를 버려 다음 전송이 새로 시작하게 한다.
+    fn finish_session(&self, key: &str, preset: &str, captured: Option<String>, resume_failed: bool) {
+        if let Some(session) = self.sessions.lock().unwrap().get_mut(key).filter(|s| s.preset == preset) {
+            if resume_failed {
+                session.cli_id = None;
+            } else if captured.is_some() {
+                session.cli_id = captured;
+            }
+        }
+    }
+
+    /// 이 탭의 대화를 끝낸다 — 임시 폴더가 지워지고 다음 전송은 새 대화로 시작한다.
+    fn reset_session(&self, key: &str) {
+        self.sessions.lock().unwrap().remove(key);
     }
 
     fn cancel(&self, key: &str) {
@@ -666,6 +765,7 @@ pub async fn run_agent(
     let cancel = app.state::<AgentState>().begin(&key).ok_or("이 탭에서 이미 실행 중입니다")?;
 
     let task_app = app.clone();
+    let session_key = key.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let state = task_app.state::<AgentState>();
         state.init(&task_app);
@@ -673,13 +773,33 @@ pub async fn run_agent(
         let program = cache.found.get(preset.as_str()).cloned().ok_or(AgentError::Failed(
             "이 에이전트의 실행 파일을 찾지 못했습니다".into(),
         ))?;
-        let full_prompt = build_prompt(&prompt);
+        // 같은 탭의 이전 대화가 있으면 같은 폴더와 CLI 대화 ID로 이어서 보낸다.
+        let (dir, resume_id) = state.session_for_run(&session_key, &preset).map_err(AgentError::Failed)?;
+        let full_prompt = if resume_id.is_some() { build_followup_prompt(&prompt) } else { build_prompt(&prompt) };
         let model = state.provider(&preset).model;
         let emit_app = task_app.clone();
         let log_preset = preset.clone();
+        let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let capture = captured.clone();
+        let notify = {
+            let (app, path, label) = (emit_app.clone(), path.clone(), label.clone());
+            move |text: &str| {
+                let payload = AgentLog { path: path.clone(), stream: "out", kind: Some("status"), line: text.to_string() };
+                let _ = app.emit_to(label.as_str(), "agent-log", payload);
+            }
+        };
+        if resume_id.is_some() {
+            notify("이전 대화를 이어서 요청합니다");
+        }
         // CLI의 스트리밍 JSON을 진행 단계로 바꿔 보낸다. 해석할 수 없는 줄은 원문 그대로, 훅 같은 잡음은 버린다.
         let on_line: Arc<dyn Fn(Stream, String) + Send + Sync> = Arc::new(move |stream, line| {
             let from_stdout = matches!(stream, Stream::Out);
+            if from_stdout {
+                let mut slot = capture.lock().unwrap();
+                if slot.is_none() {
+                    *slot = progress::session_id(&log_preset, &line);
+                }
+            }
             let send = |kind: Option<&'static str>, line: String| {
                 let payload = AgentLog { path: path.clone(), stream: if from_stdout { "out" } else { "err" }, kind, line };
                 let _ = emit_app.emit_to(label.as_str(), "agent-log", payload);
@@ -690,15 +810,25 @@ pub async fn run_agent(
                 Parsed::Skip => {}
             }
         });
-        run_in_workdir(
+        let turn = resume_id.as_deref().map_or(Turn::First, Turn::Resume);
+        let result = run_in_dir(
+            &dir,
             &program,
             (!cache.shell_path.is_empty()).then_some(cache.shell_path.as_str()),
-            |dir| build_invocation(&preset, &full_prompt, dir, model.as_deref()).expect("preset checked"),
+            |d| build_turn_invocation(&preset, &full_prompt, d, model.as_deref(), turn).expect("preset checked"),
             &text,
             &cancel,
             RUN_TIMEOUT,
             on_line,
-        )
+        );
+        let resume_failed = resume_id.is_some() && matches!(result, Err(AgentError::Failed(_)));
+        state.finish_session(&session_key, &preset, captured.lock().unwrap().clone(), resume_failed);
+        match result {
+            Err(AgentError::Failed(m)) if resume_failed => {
+                Err(AgentError::Failed(format!("{m} — 이어가던 대화를 버렸습니다. 다음 전송은 새 대화로 시작합니다")))
+            }
+            other => other,
+        }
     })
     .await;
     app.state::<AgentState>().end(&key);
@@ -783,6 +913,12 @@ pub fn set_agent_path(
 ) -> Result<(), String> {
     state.init(&app);
     state.set_path(&preset, &path)
+}
+
+/// 이 탭의 대화를 끝낸다 — "새 대화"와 탭 닫기. 임시 폴더가 지워지고 다음 전송은 새 대화로 시작한다.
+#[tauri::command]
+pub fn reset_agent_session(window: tauri::WebviewWindow, state: tauri::State<AgentState>, path: String) {
+    state.reset_session(&run_key(window.label(), &path));
 }
 
 /// 이 탭의 실행을 취소한다. 실행 중이 아니면 아무 일도 하지 않는다.
@@ -1324,6 +1460,178 @@ mod tests {
         }
         eprintln!("\n== 모델 지정 실기기 결과 ==\n{}", report.join("\n"));
         assert!(report.iter().all(|r| r.contains(": OK ")), "일부가 실패했다");
+    }
+
+    // ---- 대화 이어가기 ----
+
+    #[test]
+    fn agent_session_resume_invocations_per_cli() {
+        let dir = Path::new("/tmp/mv-x");
+        let args = |id: &str, turn: Turn| build_turn_invocation(id, "PROMPT", dir, None, turn).unwrap().args;
+        let at = |a: &[String], needle: &str| a.iter().position(|x| x == needle).unwrap_or_else(|| panic!("{needle} 없음: {a:?}"));
+
+        let claude = args("claude", Turn::Resume("sid-1"));
+        assert_eq!(claude[at(&claude, "--resume") + 1], "sid-1");
+        assert!(claude.contains(&"--tools".to_string()) && claude.contains(&"stream-json".to_string()), "제한과 스트리밍은 이어서도 같다");
+
+        let codex = args("codex", Turn::Resume("sid-1"));
+        // exec resume은 --sandbox·-C가 없다 — 설정 덮어쓰기로 같은 제한을 건다. 대화 ID는 프롬프트 바로 앞이다.
+        assert_eq!(&codex[..3], ["exec", "resume", "--json"]);
+        assert!(codex.contains(&r#"sandbox_mode="workspace-write""#.to_string()));
+        assert!(!codex.iter().any(|a| a == "--sandbox" || a == "-C" || a == "--ephemeral"), "{codex:?}");
+        assert_eq!(&codex[codex.len() - 2..], ["sid-1", "PROMPT"]);
+
+        let opencode = args("opencode", Turn::Resume("ses_1"));
+        assert_eq!(opencode[at(&opencode, "--session") + 1], "ses_1");
+
+        // 어느 CLI든 프롬프트가 마지막 인자이고 위험한 옵션은 없다.
+        for id in ["claude", "codex", "opencode"] {
+            let a = args(id, Turn::Resume("sid-1"));
+            assert_eq!(a.last().map(String::as_str), Some("PROMPT"), "{id}");
+            assert!(!a.iter().any(|x| x.contains("dangerously") || x.contains("yolo") || x == "danger-full-access"), "{id}");
+        }
+        // 대화의 첫 전송은 기록을 남겨야 이어갈 수 있다 — codex는 --ephemeral이 없다. 한 번짜리는 있다.
+        assert!(!args("codex", Turn::First).contains(&"--ephemeral".to_string()));
+        assert!(args("codex", Turn::OneShot).contains(&"--ephemeral".to_string()));
+        // 대화 ID가 없는 전송에는 이어가기 인자가 없다.
+        for id in ["claude", "codex", "opencode"] {
+            let a = args(id, Turn::First);
+            assert!(!a.iter().any(|x| x == "--resume" || x == "resume" || x == "--session"), "{id}: {a:?}");
+        }
+    }
+
+    #[test]
+    fn agent_session_followup_prompt_tells_the_agent_to_reread_the_document() {
+        let p = build_followup_prompt("이번엔 요약해 줘");
+        assert!(!p.starts_with('-'));
+        assert!(p.contains("다시 읽") && p.contains(FILE_NAME), "{p}");
+        assert!(p.ends_with("이번엔 요약해 줘"));
+        assert!(!build_prompt("x").contains("다시 읽"), "첫 전송에는 필요 없다");
+    }
+
+    #[test]
+    fn agent_session_workdir_is_reused_per_tab_and_replaced_when_the_provider_changes() {
+        let st = AgentState::default();
+        let a = run_key("main", "/docs/a.md");
+        let (dir1, id1) = st.session_for_run(&a, "claude").unwrap();
+        assert!(dir1.is_dir() && id1.is_none(), "처음에는 이어갈 ID가 없다");
+        st.finish_session(&a, "claude", Some("sid-1".into()), false);
+
+        let (dir2, id2) = st.session_for_run(&a, "claude").unwrap();
+        assert_eq!(dir2, dir1, "같은 탭은 같은 폴더");
+        assert_eq!(id2.as_deref(), Some("sid-1"));
+
+        // 다른 탭·창은 따로다.
+        let (other, other_id) = st.session_for_run(&run_key("w2", "/docs/a.md"), "claude").unwrap();
+        assert_ne!(other, dir1);
+        assert!(other_id.is_none());
+
+        // 프로바이더를 바꾸면 새 대화: 예전 폴더는 지워지고 ID도 없다.
+        let (dir3, id3) = st.session_for_run(&a, "codex").unwrap();
+        assert_ne!(dir3, dir1);
+        assert!(!dir1.exists(), "예전 폴더가 남았다");
+        assert!(id3.is_none());
+    }
+
+    #[test]
+    fn agent_session_reset_removes_the_folder_and_forgets_the_id() {
+        let st = AgentState::default();
+        let key = run_key("main", "/docs/a.md");
+        let (dir, _) = st.session_for_run(&key, "opencode").unwrap();
+        st.finish_session(&key, "opencode", Some("ses_1".into()), false);
+        std::fs::write(dir.join(FILE_NAME), "남아 있는 사본").unwrap();
+        st.reset_session(&key);
+        assert!(!dir.exists(), "대화를 끝내면 임시 폴더가 지워진다");
+        let (again, id) = st.session_for_run(&key, "opencode").unwrap();
+        assert!(id.is_none() && again.is_dir());
+        st.reset_session("none"); // 없는 키는 무시
+    }
+
+    #[test]
+    fn agent_session_failed_resume_forgets_the_id_but_a_cancel_keeps_it() {
+        let st = AgentState::default();
+        let key = run_key("main", "/docs/a.md");
+        st.session_for_run(&key, "claude").unwrap();
+        st.finish_session(&key, "claude", Some("sid-1".into()), false);
+        // 이어가다 실패하면 ID를 버린다(다음 전송은 새 대화).
+        st.finish_session(&key, "claude", None, true);
+        assert!(st.session_for_run(&key, "claude").unwrap().1.is_none());
+        // ID를 못 받은 전송(취소 등)은 알던 ID를 지우지 않는다.
+        st.finish_session(&key, "claude", Some("sid-2".into()), false);
+        st.finish_session(&key, "claude", None, false);
+        assert_eq!(st.session_for_run(&key, "claude").unwrap().1.as_deref(), Some("sid-2"));
+        // 다른 프로바이더의 결과는 이 대화에 섞이지 않는다.
+        st.finish_session(&key, "codex", Some("zzz".into()), false);
+        assert_eq!(st.session_for_run(&key, "claude").unwrap().1.as_deref(), Some("sid-2"));
+    }
+
+    #[test]
+    fn agent_session_run_in_dir_overwrites_the_copy_and_keeps_the_folder() {
+        let w = scratch("indir");
+        let cli = script(&w.0, "cli", "cat document.md > seen.txt\nprintf '고침\\n' >> document.md");
+        let work = WorkDir::create().unwrap();
+        let run = |text: &str| run_in_dir(&work.0, &cli, None, |_| Invocation { args: vec![], env: vec![] }, text, &AtomicBool::new(false), Duration::from_secs(10), quiet());
+        assert_eq!(run("첫 문서\n"), Ok("첫 문서\n고침\n".to_string()));
+        assert!(work.0.is_dir(), "한 전송이 끝나도 폴더는 남는다");
+        // 사용자가 문서를 고친 뒤의 다음 전송 — 사본이 지금 문서로 덮인다.
+        assert_eq!(run("사용자가 고친 문서\n"), Ok("사용자가 고친 문서\n고침\n".to_string()));
+        assert_eq!(std::fs::read_to_string(work.0.join("seen.txt")).unwrap(), "사용자가 고친 문서\n");
+    }
+
+    /// 실제 CLI에 두 번 묻는다 — 두 번째가 첫 번째를 기억하는지(대화 이어가기)와 사본이 두 번째 전송의 문서로 덮이는지 본다.
+    /// 요금과 시간이 들어서 기본 실행에서는 빠진다:
+    /// `cargo test --manifest-path src-tauri/Cargo.toml agent_real_session -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn agent_real_session_followup_roundtrip() {
+        let cache = detect(login_shell_path(&user_shell(), SHELL_TIMEOUT).unwrap_or_default(), &Overrides::new());
+        let path_env = Some(cache.shell_path.as_str());
+        let mut report = vec![];
+        for p in PRESETS.iter() {
+            let Some(program) = cache.found.get(p.id) else {
+                report.push(format!("{}: 못 찾음", p.id));
+                continue;
+            };
+            let st = AgentState::default();
+            let key = run_key("main", "/docs/a.md");
+            let started = Instant::now();
+            let turn = |instruction: &str, text: &str| -> Result<String, String> {
+                let (dir, resume) = st.session_for_run(&key, p.id).map_err(|e| e)?;
+                let prompt = if resume.is_some() { build_followup_prompt(instruction) } else { build_prompt(instruction) };
+                let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+                let cap = captured.clone();
+                let id = p.id;
+                let out = run_in_dir(
+                    &dir,
+                    program,
+                    path_env,
+                    |d| build_turn_invocation(id, &prompt, d, None, resume.as_deref().map_or(Turn::First, Turn::Resume)).unwrap(),
+                    text,
+                    &AtomicBool::new(false),
+                    Duration::from_secs(300),
+                    Arc::new(move |stream, l| {
+                        if matches!(stream, Stream::Out) {
+                            let mut slot = cap.lock().unwrap();
+                            if slot.is_none() {
+                                *slot = progress::session_id(id, &l);
+                            }
+                        }
+                    }),
+                );
+                st.finish_session(&key, p.id, captured.lock().unwrap().clone(), resume.is_some() && out.is_err());
+                out.map_err(|e| e.message())
+            };
+            let first = turn("비밀 단어는 '파랑고래'다. 기억만 하고 문서는 건드리지 마. 알겠다고만 답해.", "# 문서\n");
+            let second = turn("아까 말한 비밀 단어를 문서 맨 끝에 한 줄로 덧붙여 줘.", "# 문서\n\n사용자가 고친 줄\n");
+            let verdict = match (first, second) {
+                (Ok(_), Ok(t)) if t.contains("파랑고래") && t.contains("사용자가 고친 줄") => "OK".to_string(),
+                (Ok(_), Ok(t)) => format!("이어지지 않음: {t:?}"),
+                (a, b) => format!("실패: {a:?} / {b:?}"),
+            };
+            report.push(format!("{}: {verdict} ({}s)", p.id, started.elapsed().as_secs()));
+        }
+        eprintln!("\n== 대화 이어가기 실기기 결과 ==\n{}", report.join("\n"));
+        assert!(report.iter().all(|r| r.contains(": OK") || r.contains("못 찾음")), "일부 CLI가 대화를 이어가지 못했다");
     }
 
     // ---- 요청 검증과 중복 실행 방지 ----

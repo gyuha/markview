@@ -40,6 +40,32 @@ fn p(kind: &'static str, text: impl Into<String>) -> Progress {
     Progress { kind, text: text.into() }
 }
 
+/// CLI가 알려 준 대화(세션) ID 모양이 안전한가. 다음 전송에서 CLI 인자로 되돌려 주므로 옵션으로 읽힐 수 있는
+/// 값(`-`로 시작, 공백·셸 글자 포함)은 버린다.
+pub fn is_safe_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 100
+        && id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// 스트리밍 JSON 한 줄에서 대화(세션) ID를 꺼낸다. claude는 `system.init`, codex는 `thread.started`, opencode는 모든 줄의
+/// `sessionID`에 있다. 나중에 같은 CLI에 `--resume`/`resume`/`--session`으로 되돌려 주어 대화를 이어 간다.
+pub fn session_id(preset: &str, line: &str) -> Option<String> {
+    let line = line.trim();
+    if !line.starts_with('{') {
+        return None;
+    }
+    let v: Value = serde_json::from_str(line).ok()?;
+    let id = match preset {
+        "claude" if v["type"] == "system" && v["subtype"] == "init" => v["session_id"].as_str(),
+        "codex" if v["type"] == "thread.started" => v["thread_id"].as_str(),
+        "opencode" => v["sessionID"].as_str(),
+        _ => None,
+    }?;
+    is_safe_session_id(id).then(|| id.to_string())
+}
+
 /// 한 줄을 해석한다. JSON 스트림은 표준 출력에만 있다 — 표준 오류는 항상 원문이다.
 pub fn interpret(preset: &str, from_stdout: bool, line: &str) -> Parsed {
     let line = line.trim_end();
@@ -276,6 +302,24 @@ mod tests {
         assert_eq!(events("opencode", r#"{"type":"text","part":{"type":"text","text":"완료. 추가했습니다."}}"#), one("message", "완료. 추가했습니다."));
         assert_eq!(interpret("opencode", true, r#"{"type":"step_finish","part":{"reason":"stop"}}"#), Parsed::Skip);
         assert_eq!(events("opencode", r#"{"type":"error","error":{"name":"APIError","data":{"message":"Unauthorized"}}}"#), one("error", "Unauthorized"));
+    }
+
+    #[test]
+    fn agent_session_id_validation_and_extraction() {
+        for ok in ["229e8a18-46e0-4f6c-bcdf-6d1e60eb0e3b", "ses_e96644fafffeYzwNckAGP906Jn", "01a1699c-22cb-7770-87f4-ab8274042b2c", "a"] {
+            assert!(is_safe_session_id(ok), "{ok}");
+        }
+        for bad in ["", "--yolo", "-x", "_a", "a b", "a;b", "$(id)", "a/b", "한글", &"a".repeat(101)] {
+            assert!(!is_safe_session_id(bad), "{bad:?}");
+        }
+        assert_eq!(session_id("claude", r#"{"type":"system","subtype":"init","session_id":"229e8a18-46e0","tools":[]}"#).as_deref(), Some("229e8a18-46e0"));
+        assert_eq!(session_id("claude", r#"{"type":"system","subtype":"hook_started","session_id":"zzz"}"#), None, "claude는 init에서만");
+        assert_eq!(session_id("codex", r#"{"type":"thread.started","thread_id":"01a1699c-22cb"}"#).as_deref(), Some("01a1699c-22cb"));
+        assert_eq!(session_id("codex", r#"{"type":"turn.started"}"#), None);
+        assert_eq!(session_id("opencode", r#"{"type":"step_start","sessionID":"ses_abc123","part":{}}"#).as_deref(), Some("ses_abc123"));
+        assert_eq!(session_id("claude", r#"{"type":"system","subtype":"init","session_id":"--resume"}"#), None, "옵션처럼 읽히는 ID는 버린다");
+        assert_eq!(session_id("claude", "plain text"), None);
+        assert_eq!(session_id("claude", "{ not json"), None);
     }
 
     #[test]

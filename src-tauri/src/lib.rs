@@ -640,6 +640,7 @@ pub fn run() {
             agent::detect_agents,
             agent::run_agent,
             agent::cancel_agent,
+            agent::reset_agent_session,
             agent::set_agent_path,
             agent::set_provider_settings,
             agent::provider_diagnostic,

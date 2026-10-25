@@ -43,6 +43,8 @@ interface Row {
 interface Entry {
   kind: string;
   text: string;
+  /** 보낸 시각(ms) — 질의 말풍선 아래에 보인다. */
+  ts?: number;
 }
 
 type Outcome = "ok" | "error" | "cancelled";
@@ -61,6 +63,8 @@ interface TabState {
   /** 지금 하는 일 — 상태 줄에 보인다. */
   step: string;
   provider: string;
+  /** 이 대화를 이어 온 프로바이더 id — 바뀌면 새 대화다. */
+  preset: string;
   outcome: Outcome | null;
   error: string | null;
   /** 실행을 시작한 시점의 원문 — 수락할 때 현재 원문과 같아야 한다. */
@@ -157,6 +161,7 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
     <section class="agent-output">
       <div class="agent-output-head">
         <span class="agent-status" data-agent-status hidden></span>
+        <button type="button" class="agent-copy" data-agent-new title="이 대화를 끝내고 새로 시작합니다(이전 질문을 잊습니다)" hidden>새 대화</button>
         <button type="button" class="agent-copy" data-agent-copy title="출력을 클립보드로 복사">복사</button>
       </div>
       <div class="agent-log" data-agent-log role="log" aria-live="polite"></div>
@@ -195,6 +200,7 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
   const logEl = $("log");
   const statusEl = $("status");
   const copyBtn = $<HTMLButtonElement>("copy");
+  const newBtn = $<HTMLButtonElement>("new");
   const errorEl = $("error");
   const review = $("review");
   const stale = $("stale");
@@ -220,7 +226,7 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
     let st = states.get(path);
     if (!st) {
       st = {
-        phase: "idle", prompt: "", sent: "", log: [], startedAt: 0, endedAt: null, step: "", provider: "", outcome: null,
+        phase: "idle", prompt: "", sent: "", log: [], startedAt: 0, endedAt: null, step: "", provider: "", preset: "", outcome: null,
         error: null, snapshot: "", result: "", rows: [], selection: "", cancelRequested: false, run: 0,
       };
       states.set(path, st);
@@ -230,11 +236,76 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
   const currentPath = () => host.activePath();
   const found = () => (agents ?? []).filter((a) => a.path !== null && a.enabled !== false);
 
-  const mark: Record<string, string> = { user: "›", status: "·", thinking: "…", tool: "▸", warning: "⚠", error: "✗", message: "", raw: "" };
+  const mark: Record<string, string> = { status: "·", thinking: "…", tool: "▸", warning: "⚠", error: "✗", message: "", raw: "" };
 
-  function entryEl(entry: Entry): HTMLElement {
+  const DAYS = ["일", "월", "화", "수", "목", "금", "토"].map((d) => `${d}요일`);
+  /** "토요일 오전 12:53" — 로케일 데이터에 기대지 않고 직접 만든다(엔진마다 한국어 데이터가 다를 수 있다). */
+  function timeLabel(ts: number): string {
+    const d = new Date(ts);
+    const h = d.getHours();
+    return `${DAYS[d.getDay()]} ${h < 12 ? "오전" : "오후"} ${h % 12 === 0 ? 12 : h % 12}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+
+  const ICON_COPY =
+    '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>';
+  const ICON_REDO =
+    '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>';
+  const ICON_CHECK =
+    '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>';
+
+  function iconButton(attr: string, label: string, icon: string): HTMLButtonElement {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "agent-icon";
+    b.setAttribute(attr, "");
+    b.title = label;
+    b.setAttribute("aria-label", label);
+    b.innerHTML = icon;
+    return b;
+  }
+
+  /** 글을 클립보드로 복사하고 아이콘을 잠깐 체크로 바꿔 알린다. */
+  async function copyEntry(button: HTMLButtonElement, value: string): Promise<void> {
+    try {
+      await writeText(value);
+      button.dataset.copied = "true";
+      button.innerHTML = ICON_CHECK;
+      button.title = "복사됨";
+    } catch {
+      button.title = "복사하지 못했습니다";
+    }
+    window.setTimeout(() => {
+      delete button.dataset.copied;
+      button.innerHTML = ICON_COPY;
+      button.title = "복사";
+    }, 1500);
+  }
+
+  /** 출력 상자의 한 항목을 그리는 요소들. 내가 보낸 질의는 말풍선 + 시각·되돌리기·복사 줄, 에이전트의 답은 복사 아이콘이 붙는다. */
+  function entryNodes(entry: Entry): HTMLElement[] {
     const div = document.createElement("div");
     div.dataset.kind = entry.kind;
+    if (entry.kind === "user") {
+      div.textContent = entry.text;
+      const meta = document.createElement("div");
+      meta.className = "agent-meta";
+      const time = document.createElement("span");
+      time.className = "agent-time";
+      time.dataset.agentTime = "";
+      time.textContent = entry.ts ? timeLabel(entry.ts) : "";
+      const redo = iconButton("data-agent-entry-redo", "입력 상자로 되돌리기", ICON_REDO);
+      redo.addEventListener("click", () => {
+        const path = currentPath();
+        if (!path) return;
+        stateOf(path).prompt = entry.text;
+        render();
+        prompt.focus();
+      });
+      const copy = iconButton("data-agent-entry-copy", "복사", ICON_COPY);
+      copy.addEventListener("click", () => void copyEntry(copy, entry.text));
+      meta.append(time, redo, copy);
+      return [div, meta];
+    }
     if (mark[entry.kind]) {
       const m = document.createElement("span");
       m.className = "agent-mark";
@@ -242,7 +313,12 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
       div.append(m, " ");
     }
     div.append(entry.text);
-    return div;
+    if (entry.kind === "message") {
+      const copy = iconButton("data-agent-entry-copy", "복사", ICON_COPY);
+      copy.addEventListener("click", () => void copyEntry(copy, entry.text));
+      div.append(copy);
+    }
+    return [div];
   }
 
   /** 출력 상자에 한 줄을 더한다. 바로 앞 줄과 같으면(설정 경고 반복 등) 더하지 않는다. */
@@ -255,11 +331,16 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
     if (overflow) st.log.shift();
     if (entry.kind === "status" || entry.kind === "thinking" || entry.kind === "tool") st.step = entry.text;
     if (path !== currentPath()) return;
-    logEl.append(entryEl(entry));
-    if (overflow) logEl.firstElementChild?.remove();
+    if (overflow) {
+      // 가장 오래된 항목이 밀려났다 — 말풍선은 요소가 둘이라 통째로 다시 그린다.
+      logEl.replaceChildren(...st.log.flatMap(entryNodes));
+    } else {
+      logEl.append(...entryNodes(entry));
+    }
     logEl.scrollTop = logEl.scrollHeight;
     updateStatus();
     copyBtn.disabled = false;
+    newBtn.hidden = false;
   }
 
   const mmss = (ms: number) => {
@@ -301,9 +382,14 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
     const usable = found().length > 0;
 
     empty.hidden = agents === null || usable;
-    logEl.replaceChildren(...(st?.log ?? []).map(entryEl));
+    logEl.replaceChildren(...(st?.log ?? []).flatMap(entryNodes));
     logEl.scrollTop = logEl.scrollHeight;
+    // 실행 중이거나 결과를 검토하는 중에는 입력 상자를 쓸 수 없으니 되돌리기도 막는다.
+    for (const b of logEl.querySelectorAll<HTMLButtonElement>("[data-agent-entry-redo]")) b.disabled = phase !== "idle";
     copyBtn.disabled = !st?.log.length;
+    // 대화가 있을 때만 보이고, 실행 중이거나 결과를 검토하는 중에는 끊을 수 없다.
+    newBtn.hidden = !st?.log.length;
+    newBtn.disabled = phase !== "idle";
     updateStatus();
     errorEl.hidden = !st?.error;
     errorEl.textContent = st?.error ?? "";
@@ -417,9 +503,13 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
     st.endedAt = null;
     st.step = "요청을 보내는 중";
     // 보낸 지시를 출력 상자 맨 위에 두고, 보내자마자 상태 줄이 돈다 — CLI가 첫 줄을 내기까지 비어 보이지 않게.
-    st.log = [{ kind: "user", text: raw }];
+    // 출력은 전송마다 지우지 않고 쌓는다 — 같은 탭의 대화는 Rust가 CLI의 세션으로 이어 준다. 프로바이더를 바꾸면 새 대화다.
+    if (st.log.length && st.preset && st.preset !== preset) st.log.push({ kind: "status", text: "프로바이더가 바뀌어 새 대화로 시작합니다" });
+    st.preset = preset;
+    st.log.push({ kind: "user", text: raw, ts: Date.now() });
     if (st.selection) st.log.push({ kind: "status", text: `고른 부분 ${st.selection.length}자를 함께 보냈습니다` });
     st.log.push({ kind: "status", text: `${st.provider}에 요청을 보냈습니다` });
+    if (st.log.length > MAX_LOG_LINES) st.log.splice(0, st.log.length - MAX_LOG_LINES);
     render();
     const finish = (outcome: Outcome) => {
       st.endedAt = Date.now();
@@ -523,6 +613,22 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
     prompt.value = "";
     void run(path, raw);
   });
+  newBtn.addEventListener("click", () => {
+    const path = currentPath();
+    const st = path ? states.get(path) : undefined;
+    if (!path || !st || st.phase !== "idle") return;
+    // Rust가 이 탭의 대화(임시 폴더와 CLI 세션)를 끝낸다. 화면도 처음 상태로 돌아간다.
+    void invoke("reset_agent_session", { path });
+    st.log = [];
+    st.sent = "";
+    st.startedAt = 0;
+    st.endedAt = null;
+    st.step = "";
+    st.preset = "";
+    st.outcome = null;
+    st.error = null;
+    render();
+  });
   copyBtn.addEventListener("click", async () => {
     const path = currentPath();
     const st = path ? states.get(path) : undefined;
@@ -592,6 +698,8 @@ export function createAgentPanel(root: HTMLElement, host: AgentHost, onClose: ()
     forget(path) {
       const st = states.get(path);
       if (st?.phase === "running") void invoke("cancel_agent", { path });
+      // 탭이 닫히면 이 탭의 대화(임시 폴더)도 정리한다.
+      void invoke("reset_agent_session", { path });
       states.delete(path);
       if (path === currentPath()) render();
     },
