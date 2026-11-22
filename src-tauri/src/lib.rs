@@ -649,7 +649,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|handle, event| {
+    // 설정 창(`main`)은 Ready 때 만들어진다. 콜드 스타트에서는 Opened가 Ready보다 먼저 올 수 있다.
+    let mut ready = false;
+    app.run(move |handle, event| {
+        if let RunEvent::Ready = event {
+            ready = true;
+            return;
+        }
         // macOS가 "연결 프로그램으로 열기"나 파일 더블클릭으로 앱을 깨울 때 오는 이벤트.
         if let RunEvent::Opened { urls } = event {
             let paths: Vec<String> = urls
@@ -669,13 +675,15 @@ pub fn run() {
                 Some(label) => {
                     let _ = handle.emit_to(label, "files-opened", ());
                 }
-                None => {
+                // Ready 전이면 곧 만들어질 main이 시작 때 버퍼를 비우므로 새 창을 만들지 않는다.
+                None if ready => {
                     let alive: Vec<String> = handle.webview_windows().keys().cloned().collect();
                     let label = handle.state::<WindowLabels>().alloc(&alive);
                     let _ = tauri::WebviewWindowBuilder::new(handle, &label, tauri::WebviewUrl::default())
                         .title("markview")
                         .build();
                 }
+                None => {}
             }
         }
     });
